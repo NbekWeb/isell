@@ -1,0 +1,20 @@
+flutter_native_splash:
+  # Theme 2: Light mode
+  color: "#ffffff"
+  color_dark: "#111111"
+  
+  # Android configuration
+  android: true
+  android_gravity: center
+  android_12:
+    color: "#ffffff"
+    color_dark: "#111111"
+    icon_background_color: "#ffffff"
+    icon_background_color_dark: "#111111"
+  
+  # iOS configuration
+  ios: true
+  web: false
+  
+  # Full screen configuration
+  fullscreen: true
