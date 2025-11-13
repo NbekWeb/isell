@@ -88,8 +88,8 @@ class _CartPageState extends State<CartPage> {
       backgroundColor: backgroundColor,
       body: _isLoading
           ? Center(
-              child: CircularProgressIndicator(
-                color: isDark ? Colors.white : const Color(0xFF2196F3),
+              child: const CircularProgressIndicator(
+                color: Color(0xFF1B7EFF),
               ),
             )
           : cartItems.isEmpty

@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
@@ -7,6 +6,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 
 import '../../components/banner_carousel.dart';
 import '../../components/product_card.dart';
+import '../../components/pagination_widget.dart';
 import '../../services/product_services.dart';
 
 class HomePage extends StatefulWidget {
@@ -19,7 +19,9 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   final TextEditingController _searchController = TextEditingController();
   final List<Map<String, dynamic>> _products = [];
+  List<Map<String, dynamic>> _banners = [];
   bool _isLoading = true;
+  bool _isLoadingBanners = true;
   Timer? _debounce;
   int _currentPage = 1;
   int _totalPages = 1;
@@ -28,6 +30,22 @@ class _HomePageState extends State<HomePage> {
   void initState() {
     super.initState();
     _fetchProducts();
+    _fetchBanners();
+  }
+
+  void _fetchBanners() async {
+    setState(() {
+      _isLoadingBanners = true;
+    });
+
+    final banners = await ProductServices.getBanners();
+
+    if (mounted) {
+      setState(() {
+        _banners = banners;
+        _isLoadingBanners = false;
+      });
+    }
   }
 
   @override
@@ -75,113 +93,12 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
-  List<Widget> _buildPaginationButtons(Color textColor, Color borderColor, Color hintColor) {
-    final tokens = _buildPaginationSequence();
-    final List<Widget> buttons = [];
-
-    for (final token in tokens) {
-      if (token is int) {
-        buttons.add(_buildPageButton(token, textColor, borderColor));
-      } else {
-        buttons.add(
-          Padding(
-            padding: EdgeInsets.symmetric(horizontal: 4.w),
-            child: Text(
-              '...',
-              style: TextStyle(color: hintColor, fontSize: 14.sp),
-            ),
-          ),
-        );
-      }
-    }
-
-    return buttons;
-  }
-
-  List<dynamic> _buildPaginationSequence() {
-    if (_totalPages <= 5) {
-      return List<int>.generate(_totalPages, (index) => index + 1);
-    }
-
-    final List<dynamic> sequence = <dynamic>[1];
-
-    int start;
-    int end;
-
-    if (_currentPage <= 3) {
-      start = 2;
-      end = 4;
-    } else if (_currentPage == 4) {
-      start = 4;
-      end = math.min(_totalPages - 1, 5);
-    } else if (_currentPage >= _totalPages - 2) {
-      start = math.max(2, _totalPages - 3);
-      end = _totalPages - 1;
-    } else {
-      start = _currentPage - 1;
-      end = _currentPage + 1;
-    }
-
-    start = math.max(2, start);
-    end = math.min(_totalPages - 1, end);
-
-    if (start <= end) {
-      if (start > 2) {
-        sequence.add('ellipsis');
-      }
-      for (int i = start; i <= end; i++) {
-        sequence.add(i);
-      }
-      if (end < _totalPages - 1) {
-        sequence.add('ellipsis');
-      }
-    } else {
-      sequence.add('ellipsis');
-    }
-
-    sequence.add(_totalPages);
-
-    return sequence;
-  }
-
-  Widget _buildPageButton(int pageNumber, Color textColor, Color borderColor) {
-    final isActive = pageNumber == _currentPage;
-    return GestureDetector(
-      onTap: () => _fetchProducts(
-        search: _searchController.text.trim().isEmpty
-            ? null
-            : _searchController.text.trim(),
-        page: pageNumber,
-      ),
-      child: Container(
-        width: 32.w,
-        height: 32.w,
-        margin: EdgeInsets.symmetric(horizontal: 4.w),
-        decoration: BoxDecoration(
-          color: isActive
-              ? const Color(0xFF2196F3)
-              : Colors.transparent,
-          border: Border.all(
-            color: isActive
-                ? const Color(0xFF2196F3)
-                : borderColor,
-            width: 1,
-          ),
-          borderRadius: BorderRadius.circular(8.r),
-        ),
-        child: Center(
-          child: Text(
-            '$pageNumber',
-            style: TextStyle(
-              color: isActive ? Colors.white : textColor,
-              fontSize: 14.sp,
-              fontWeight: isActive
-                  ? FontWeight.w600
-                  : FontWeight.normal,
-            ),
-          ),
-        ),
-      ),
+  void _onPageChanged(int page) {
+    _fetchProducts(
+      search: _searchController.text.trim().isEmpty
+          ? null
+          : _searchController.text.trim(),
+      page: page,
     );
   }
 
@@ -195,12 +112,17 @@ class _HomePageState extends State<HomePage> {
         isDark ? (Colors.grey[400] ?? Colors.grey) : (Colors.grey[600] ?? Colors.grey);
     final iconColor = isDark ? Colors.white : Colors.black87;
 
-    return Scaffold(
-      backgroundColor: backgroundColor,
-      body: SafeArea(
-        child: SingleChildScrollView(
-          physics: const BouncingScrollPhysics(),
-          child: Column(
+    return GestureDetector(
+      onTap: () {
+        // Hide keyboard when tapping outside
+        FocusScope.of(context).unfocus();
+      },
+      child: Scaffold(
+        backgroundColor: backgroundColor,
+        body: SafeArea(
+          child: SingleChildScrollView(
+            physics: const BouncingScrollPhysics(),
+            child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               // Logo
@@ -272,7 +194,21 @@ class _HomePageState extends State<HomePage> {
               SizedBox(height: 16.h),
 
               // Banner Carousel
-              const BannerCarousel(),
+              _isLoadingBanners
+                  ? Container(
+                      margin: EdgeInsets.symmetric(horizontal: 16.w),
+                      height: 180.h,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(12.r),
+                        color: Colors.grey[300],
+                      ),
+                      child: const Center(
+                        child: CircularProgressIndicator(
+                          color: Color(0xFF1B7EFF),
+                        ),
+                      ),
+                    )
+                  : BannerCarousel(banners: _banners),
 
               SizedBox(height: 24.h),
 
@@ -296,7 +232,11 @@ class _HomePageState extends State<HomePage> {
                 child: _isLoading
                     ? SizedBox(
                         height: 200.h,
-                        child: const Center(child: CircularProgressIndicator()),
+                        child: const Center(
+                        child: CircularProgressIndicator(
+                          color: Color(0xFF1B7EFF),
+                        ),
+                      ),
                       )
                     : _products.isEmpty
                         ? SizedBox(
@@ -329,53 +269,20 @@ class _HomePageState extends State<HomePage> {
 
               SizedBox(height: 20.h),
               
-              // Pagination
-              if (_totalPages > 1)
-                Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 20.h),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      // Previous button
-                      IconButton(
-                        onPressed: _currentPage > 1
-                            ? () => _fetchProducts(
-                                  search: _searchController.text.trim().isEmpty
-                                      ? null
-                                      : _searchController.text.trim(),
-                                  page: _currentPage - 1,
-                                )
-                            : null,
-                        icon: Icon(
-                          Icons.chevron_left,
-                          color: _currentPage > 1 ? textColor : hintColor,
-                        ),
-                      ),
-                      SizedBox(width: 12.w),
-                      // Page numbers
-                      ..._buildPaginationButtons(textColor, borderColor, hintColor),
-                      SizedBox(width: 12.w),
-                      // Next button
-                      IconButton(
-                        onPressed: _currentPage < _totalPages
-                            ? () => _fetchProducts(
-                                  search: _searchController.text.trim().isEmpty
-                                      ? null
-                                      : _searchController.text.trim(),
-                                  page: _currentPage + 1,
-                                )
-                            : null,
-                        icon: Icon(
-                          Icons.chevron_right,
-                          color: _currentPage < _totalPages ? textColor : hintColor,
-                        ),
-                      ),
-                    ],
-                  ),
+              // Pagination - only show when not loading
+              if (!_isLoading)
+                PaginationWidget(
+                  currentPage: _currentPage,
+                  totalPages: _totalPages,
+                  onPageChanged: _onPageChanged,
+                  textColor: textColor,
+                  borderColor: borderColor,
+                  hintColor: hintColor,
                 ),
             ],
           ),
         ),
+      ),
       ),
     );
   }

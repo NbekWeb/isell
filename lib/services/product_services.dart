@@ -5,6 +5,7 @@ import 'api_service.dart';
 class ProductServices {
   static Future<Map<String, dynamic>> getAllProducts({
     String? name,
+    int? category,
     int page = 1,
   }) async {
     try {
@@ -13,6 +14,7 @@ class ProductServices {
         method: 'GET',
         queryParameters: {
           if (name != null && name.isNotEmpty) 'name': name,
+          if (category != null) 'category': category,
           'page': page,
           'page_size': 10
         },
@@ -72,6 +74,70 @@ class ProductServices {
     }
 
     return null;
+  }
+
+  static Future<List<Map<String, dynamic>>> getBanners() async {
+    try {
+      final Response response = await ApiService.request(
+        url: 'products/banners/',
+        method: 'GET',
+      );
+
+      final data = response.data;
+
+      if (data is List) {
+        final banners = data
+            .map<Map<String, dynamic>>(
+              (item) => Map<String, dynamic>.from(item as Map),
+            )
+            .where((banner) => banner['is_active'] == true)
+            .toList();
+
+        // Sort banners: if all orders are 0, sort by id; otherwise sort by order
+        final allOrdersZero = banners.every((b) => (b['order'] as int? ?? 0) == 0);
+        
+        if (allOrdersZero) {
+          banners.sort((a, b) => (a['id'] as int? ?? 0).compareTo(b['id'] as int? ?? 0));
+        } else {
+          banners.sort((a, b) {
+            final orderA = a['order'] as int? ?? 0;
+            final orderB = b['order'] as int? ?? 0;
+            if (orderA == 0) return 1; // Put 0 orders at the end
+            if (orderB == 0) return -1;
+            return orderA.compareTo(orderB);
+          });
+        }
+
+        return banners;
+      }
+    } catch (_) {
+      // ignore
+    }
+
+    return <Map<String, dynamic>>[];
+  }
+
+  static Future<List<Map<String, dynamic>>> getCategories() async {
+    try {
+      final Response response = await ApiService.request(
+        url: 'products/categories/',
+        method: 'GET',
+      );
+
+      final data = response.data;
+
+      if (data is List) {
+        return data
+            .map<Map<String, dynamic>>(
+              (item) => Map<String, dynamic>.from(item as Map),
+            )
+            .toList();
+      }
+    } catch (_) {
+      // ignore
+    }
+
+    return <Map<String, dynamic>>[];
   }
 }
 

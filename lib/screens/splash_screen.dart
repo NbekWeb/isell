@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
+import '../services/theme_service.dart';
 
 class SplashScreen extends StatefulWidget {
   final Function(ThemeMode)? onThemeUpdate;
@@ -15,12 +16,25 @@ class _SplashScreenState extends State<SplashScreen>
   late AnimationController _animationController;
   late Animation<double> _fadeAnimation;
   late Animation<double> _scaleAnimation;
+  ThemeMode _themeMode = ThemeMode.system;
+  bool _isThemeLoaded = false;
 
   @override
   void initState() {
     super.initState();
+    _loadTheme();
     _initializeAnimations();
     _startSplashSequence();
+  }
+
+  Future<void> _loadTheme() async {
+    final themeMode = await ThemeService.getThemeMode();
+    if (mounted) {
+      setState(() {
+        _themeMode = themeMode;
+        _isThemeLoaded = true;
+      });
+    }
   }
 
   void _initializeAnimations() {
@@ -60,10 +74,31 @@ class _SplashScreenState extends State<SplashScreen>
   }
 
   Color get _backgroundColor {
-    final brightness = MediaQuery.of(context).platformBrightness;
+    if (!_isThemeLoaded) {
+      // Default to system brightness while loading
+      final brightness = MediaQuery.of(context).platformBrightness;
+      return brightness == Brightness.light
+          ? const Color(0xFFEBEBEB)
+          : const Color(0xFF111111);
+    }
+    
+    // Determine actual brightness based on theme mode
+    Brightness brightness;
+    switch (_themeMode) {
+      case ThemeMode.light:
+        brightness = Brightness.light;
+        break;
+      case ThemeMode.dark:
+        brightness = Brightness.dark;
+        break;
+      case ThemeMode.system:
+        brightness = MediaQuery.of(context).platformBrightness;
+        break;
+    }
+    
     return brightness == Brightness.light
-        ? Colors.white
-        : const Color(0xFF111111);
+        ? const Color(0xFFEBEBEB) // Light theme background
+        : const Color(0xFF111111); // Dark theme background
   }
 
   @override

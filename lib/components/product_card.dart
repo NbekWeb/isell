@@ -14,7 +14,7 @@ mixin ProductCardHelpers {
     return Container(
       width: width ?? double.infinity,
       height: height,
-      color: background.withOpacity(0.1),
+      color: background,
       alignment: Alignment.center,
       padding: const EdgeInsets.symmetric(horizontal: 15),
       child: Text(
@@ -127,6 +127,8 @@ class _ProductCardState extends State<ProductCard> with ProductCardHelpers {
     final cardColor = isDark ? const Color(0xFF2A2A2A) : Colors.white;
     final textColor = isDark ? Colors.white : Colors.black87;
     final borderColor = isDark ? Colors.white : Colors.black87;
+    final fallbackBgColor = isDark ? const Color(0xFF222222) : const Color.fromRGBO(255, 255, 255, 1);
+    final fallbackTextColor = isDark ? Colors.white : Colors.black87;
     final imageUrl = _firstImageUrl(widget.product);
     final priceText = _formatPrice(widget.product['price']);
     final monthlyText = _formatMonthly(widget.product['monthly']);
@@ -157,14 +159,14 @@ class _ProductCardState extends State<ProductCard> with ProductCardHelpers {
                       height: double.infinity,
                       errorBuilder: (_, __, ___) => ProductCardHelpers.fallbackImage(
                         widget.product['name']?.toString(),
-                        cardColor,
-                        textColor,
+                        fallbackBgColor,
+                        fallbackTextColor,
                       ),
                     )
                   : ProductCardHelpers.fallbackImage(
                       widget.product['name']?.toString(),
-                      cardColor,
-                      textColor,
+                      fallbackBgColor,
+                      fallbackTextColor,
                     ),
             ),
           ),
@@ -194,7 +196,7 @@ class _ProductCardState extends State<ProductCard> with ProductCardHelpers {
 
                 // Price
                 Text(
-                  '$priceText сум',
+                  priceText,
                   style: TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.bold,
@@ -206,7 +208,7 @@ class _ProductCardState extends State<ProductCard> with ProductCardHelpers {
                 // Monthly Payment
                 if (monthlyText != null)
                   Text(
-                    'от $monthlyText сум/мес',
+                    'от $monthlyText в мес',
                     style: const TextStyle(
                       fontSize: 12,
                       color: Color(0xFF16A34A),
@@ -336,17 +338,52 @@ class _ProductCardState extends State<ProductCard> with ProductCardHelpers {
     return id?.toString();
   }
  
+  double? _parseUsdValue(dynamic value) {
+    if (value == null) return null;
+
+    if (value is num) return value.toDouble();
+
+    final str = value.toString().trim().replaceAll(',', '.');
+    if (str.isEmpty) return null;
+
+    final double? parsed = double.tryParse(str);
+    if (parsed != null) return parsed;
+
+    final sanitized = str.replaceAll(RegExp(r'[^\d]'), '');
+    if (sanitized.isEmpty) return null;
+    final int? intValue = int.tryParse(sanitized);
+    return intValue?.toDouble();
+  }
+
+  String _formatUsd(num amount) {
+    final isWhole = amount == amount.roundToDouble();
+    final formatted =
+        isWhole ? amount.round().toString() : amount.toStringAsFixed(2);
+    final parts = formatted.split('.');
+    final integerPart = parts[0];
+    final decimalPart = parts.length > 1 ? parts[1] : null;
+    final buffer = StringBuffer();
+    for (int i = 0; i < integerPart.length; i++) {
+      if (i != 0 && (integerPart.length - i) % 3 == 0) {
+        buffer.write(' ');
+      }
+      buffer.write(integerPart[i]);
+    }
+    return decimalPart != null
+        ? '\$${buffer.toString()}.$decimalPart'
+        : '\$${buffer.toString()}';
+  }
+
   String _formatPrice(dynamic price) {
-    if (price == null) return '0';
-    if (price is num) return price.toStringAsFixed(0);
-    return price.toString();
+    final amount = _parseUsdValue(price);
+    if (amount == null) return _formatUsd(0);
+    return _formatUsd(amount);
   }
 
   String? _formatMonthly(dynamic monthly) {
-    if (monthly == null) return null;
-    if (monthly is num) return monthly.toStringAsFixed(0);
-    final value = monthly.toString();
-    return value.isEmpty ? null : value;
+    final amount = _parseUsdValue(monthly);
+    if (amount == null) return null;
+    return _formatUsd(amount);
   }
 }
 

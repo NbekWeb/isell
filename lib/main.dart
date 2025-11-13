@@ -6,7 +6,14 @@ import 'screens/splash_screen.dart';
 import 'components/main_layout.dart';
 import 'services/theme_service.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  
+  // Initialize Yandex MapKit with API key
+  // API key is configured in AndroidManifest.xml and Info.plist
+  // For now, we'll initialize it here if needed
+  // await YandexMapkit.initMapkit(apiKey: '491a85a5-7445-4d5d-a419-84bda4ad6328');
+  
   runApp(const ISellApp());
 }
 
@@ -88,10 +95,10 @@ class _ISellAppState extends State<ISellApp> {
             useMaterial3: true,
             fontFamily: GoogleFonts.poppins().fontFamily,
             textTheme: GoogleFonts.poppinsTextTheme(),
-            scaffoldBackgroundColor: const Color(0xFFEFEFEF),
+            scaffoldBackgroundColor: const Color(0xFFEBEBEB),
             brightness: Brightness.light,
             appBarTheme: const AppBarTheme(
-              backgroundColor:  Color(0xFFEFEFEF),
+              backgroundColor:  Color(0xFFEBEBEB),
               foregroundColor: Colors.black,
               elevation: 0,
             ),

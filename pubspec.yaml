@@ -57,6 +57,12 @@ dependencies:
   shared_preferences: ^2.2.2
   flutter_secure_storage: ^9.2.2
   
+  # URL launcher
+  url_launcher: ^6.2.5
+  
+  # Maps
+  yandex_mapkit: ^4.2.1
+  
   # JSON serialization
   json_annotation: ^4.8.1
 

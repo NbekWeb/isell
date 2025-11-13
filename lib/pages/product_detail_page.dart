@@ -3,7 +3,9 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:carousel_slider/carousel_slider.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import '../components/product_card.dart';
+import '../components/product_detail_sections.dart';
 import 'phone_input_page.dart';
 import '../services/product_services.dart';
 
@@ -27,7 +29,6 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
   int downPayment = 0;
   String installmentPeriod = '6 месяц';
   bool _isLoadingFilter = false;
-  Map<String, dynamic>? _filteredProduct;
 
   List<Map<String, dynamic>> _colorOptions = [];
   List<Map<String, dynamic>> _storageOptions = [];
@@ -35,6 +36,7 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
   final List<String> periods = ['6 месяц', '12 месяц', '18 месяц', '24 месяц'];
   final GlobalKey _selectKey = GlobalKey();
   int? _productId;
+
 
   @override
   void initState() {
@@ -75,13 +77,10 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
 
       if (result != null && mounted) {
         setState(() {
-          _filteredProduct = result;
           _currentProduct = Map<String, dynamic>.from(result);
-          debugPrint('Product keys: ${_currentProduct.keys}');
           _hydrateOptions();
           _isLoadingFilter = false;
         });
-        debugPrint('Filter result: $_filteredProduct');
       } else {
         setState(() {
           _isLoadingFilter = false;
@@ -222,136 +221,150 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final backgroundColor = isDark ? const Color(0xFF1A1A1A) : const Color(0xFFEBEBEB);
+    final fallbackBgColor = isDark ? const Color(0xFF222222) : const Color.fromRGBO(255, 255, 255, 1);
+    final fallbackTextColor = isDark ? Colors.white : Colors.black87;
+    final textColor = isDark ? Colors.white : Colors.black87;
+    final subtitleColor = isDark ? (Colors.grey[400] ?? Colors.grey) : (Colors.grey[600] ?? Colors.grey);
+    final borderColor = isDark ? Colors.white : Colors.black87;
+    final sectionBackground = isDark ? const Color(0xFF222222) : Colors.white;
+    final bottomBarColor = sectionBackground;
+    
     return Scaffold(
-      backgroundColor: const Color(0xFF1A1A1A),
+      backgroundColor: backgroundColor,
       body: SafeArea(
         bottom: false,
         child: Stack(
           children: [
             Column(
-              children: [
-                Expanded(
-                  child: SingleChildScrollView(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Padding(
-                          padding: EdgeInsets.all(16),
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(20),
-                            child: _buildProductImage(),
+          children: [
+            Expanded(
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: EdgeInsets.all(16),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(20),
+                            child: _buildProductImage(fallbackBgColor, fallbackTextColor),
                           ),
                         ),
-                        Padding(
-                          padding: EdgeInsets.symmetric(horizontal: 16),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
+                    Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
                                 _currentProduct['name']?.toString() ?? 'Название продукта',
-                                style: GoogleFonts.poppins(
-                                  fontSize: 24,
-                                  fontWeight: FontWeight.w500,
-                                  color: Colors.white,
-                                ),
-                              ),
-                              SizedBox(height: 5),
-                              Text(
-                                '${_formatPriceValue(_currentProduct['price'])} сум',
-                                style: GoogleFonts.poppins(
-                                  fontSize: 24,
-                                  fontWeight: FontWeight.w600,
-                                  color: Colors.white,
-                                ),
-                              ),
-                              SizedBox(height: 24.h),
-                              _buildSectionTitle('Цвет'),
-                              SizedBox(height: 12.h),
-                              _buildColorSelection(),
-                              SizedBox(height: 24.h),
-                              _buildSectionTitle('Память'),
-                              SizedBox(height: 12.h),
-                              _buildStorageSelection(),
-                              SizedBox(height: 24.h),
-                              if (_simOptions.isNotEmpty) ...[
-                                _buildSectionTitle('SIM-карта'),
-                                SizedBox(height: 12.h),
-                                _buildSimSelection(),
-                                SizedBox(height: 24.h),
-                              ],
-                              _buildSectionTitle('Характеристики'),
-                              SizedBox(height: 12.h),
-                              _buildSpecifications(),
-                              SizedBox(height: 24.h),
-                              _buildSectionTitle('Общий первоначальный взнос'),
-                              SizedBox(height: 12.h),
-                              Container(
-                                width: double.infinity,
-                                padding: EdgeInsets.symmetric(vertical: 12.h),
-                                decoration: BoxDecoration(
-                                  color: Colors.transparent,
-                                  border: Border.all(color: Colors.white, width: 1),
-                                  borderRadius: BorderRadius.circular(12.r),
-                                ),
-                                child: Center(
-                                  child: Text(
-                                    downPayment.toString(),
-                                    style: GoogleFonts.poppins(
-                                      color: Colors.white,
-                                      fontSize: 16.sp,
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              SizedBox(height: 8),
-                              Text(
-                                'Будет распределен между товарами пропорционально их стоимости',
-                                style: GoogleFonts.poppins(
-                                  fontSize: 12,
-                                  color: Colors.grey[400],
-                                ),
-                              ),
-                              SizedBox(height: 24),
-                              _buildSectionTitle('Срок рассрочки'),
-                              SizedBox(height: 12),
-                              _buildInstallmentPeriod(),
-                              SizedBox(height: 24),
-                              Text(
-                                '${_formatPriceValue(_currentProduct['price'])} сум',
-                                style: GoogleFonts.poppins(
-                                  fontSize: 20,
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.white,
-                                ),
-                              ),
-                              SizedBox(height: 4),
-                              Text(
-                                _formatMonthlyPayment(),
-                                style: GoogleFonts.poppins(
-                                  fontSize: 16,
-                                  color: const Color(0xFF2196F3),
-                                ),
-                              ),
-                              SizedBox(height: 20),
-                            ],
+                            style: GoogleFonts.poppins(
+                              fontSize: 24,
+                              fontWeight: FontWeight.w500,
+                              color: textColor,
+                            ),
                           ),
-                        ),
-                      ],
+                          SizedBox(height: 5),
+                          Text(
+                                _formatPriceValue(_currentProduct['price']),
+                            style: GoogleFonts.poppins(
+                              fontSize: 24,
+                              fontWeight: FontWeight.w600,
+                              color: textColor,
+                            ),
+                          ),
+                          SizedBox(height: 24.h),
+                          ProductSectionCard(
+                            backgroundColor: sectionBackground,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                ProductOptionSection(
+                                  title: 'Цвет',
+                                  options: _buildOptionViewData(
+                                    _colorOptions,
+                                    'color_name',
+                                  ),
+                                  emptyMessage: 'Нет доступных цветов',
+                                  onOptionTap: _onColorChanged,
+                                  textColor: textColor,
+                                  borderColor: borderColor,
+                                  subtitleColor: subtitleColor,
+                                ),
+                                SizedBox(height: 24.h),
+                                ProductOptionSection(
+                                  title: 'Память',
+                                  options: _buildOptionViewData(
+                                    _storageOptions,
+                                    'storage_name',
+                                  ),
+                                  emptyMessage: 'Нет доступных вариантов памяти',
+                                  onOptionTap: _onStorageChanged,
+                                  textColor: textColor,
+                                  borderColor: borderColor,
+                                  subtitleColor: subtitleColor,
+                                ),
+                                if (_simOptions.isNotEmpty) ...[
+                                  SizedBox(height: 24.h),
+                                  ProductOptionSection(
+                                    title: 'SIM-карта',
+                                    options: _buildOptionViewData(
+                                      _simOptions,
+                                      'sim_card_name',
+                                    ),
+                                    emptyMessage:
+                                        'Нет доступных вариантов SIM-карт',
+                                    onOptionTap: _onSimChanged,
+                                    textColor: textColor,
+                                    borderColor: borderColor,
+                                    subtitleColor: subtitleColor,
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                          SizedBox(height: 24.h),
+                          ProductSpecificationsSection(
+                            title: 'Характеристики',
+                            items: _buildSpecificationItems(),
+                            textColor: textColor,
+                            subtitleColor: subtitleColor,
+                            backgroundColor: sectionBackground,
+                          ),
+                          SizedBox(height: 24.h),
+                          ProductFinancialSection(
+                            backgroundColor: sectionBackground,
+                            borderColor: borderColor,
+                            textColor: textColor,
+                            subtitleColor: subtitleColor,
+                            downPayment: _formatPriceValue(downPayment),
+                            note:
+                                'Будет распределен между товарами пропорционально их стоимости',
+                            installmentSelector:
+                                _buildInstallmentPeriod(textColor, borderColor),
+                            totalPrice:
+                                _formatPriceValue(_currentProduct['price'] ?? 0),
+                            monthlyText: _formatMonthlyPayment(),
+                          ),
+                          SizedBox(height: 20),
+                        ],
+                      ),
                     ),
-                  ),
+                  ],
                 ),
-                Container(
-                  padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
-                  decoration: const BoxDecoration(
-                    color: Color(0xFF1A1A1A),
-                  ),
-                  child: SafeArea(
-                    top: false,
-                    child: SizedBox(
-                      width: double.infinity,
-                      height: 50.h,
-                      child: ElevatedButton(
+              ),
+            ),
+            Container(
+              padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
+              decoration: BoxDecoration(
+                color: bottomBarColor,
+              ),
+              child: SafeArea(
+                top: false,
+                child: SizedBox(
+                  width: double.infinity,
+                  height: 50.h,
+                  child: ElevatedButton(
                         onPressed: () {
                           Navigator.push(
                             context,
@@ -360,28 +373,36 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
                             ),
                           );
                         },
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF2196F3),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12.r),
-                          ),
-                        ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.shopping_bag, color: Colors.white, size: 24.w),
-                            SizedBox(width: 8.w),
-                            Text(
-                              'Оформить',
-                              style: GoogleFonts.poppins(
-                                fontSize: 16.sp,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.white,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF2196F3),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12.r),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                            SvgPicture.asset(
+                              'assets/svg/bag.svg',
+                              width: 24.w,
+                              height: 24.w,
+                              colorFilter: const ColorFilter.mode(
+                                Colors.white,
+                                BlendMode.srcIn,
                               ),
                             ),
-                          ],
+                        SizedBox(width: 8.w),
+                        Text(
+                          'Оформить',
+                          style: GoogleFonts.poppins(
+                            fontSize: 16.sp,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.white,
+                          ),
                         ),
-                      ),
+                      ],
+                    ),
+                  ),
                     ),
                   ),
                 ),
@@ -391,224 +412,21 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
               Container(
                 color: Colors.black.withOpacity(0.3),
                 child: const Center(
-                  child: CircularProgressIndicator(),
+                  child: CircularProgressIndicator(
+                    color: Color(0xFF1B7EFF),
                 ),
               ),
+            ),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildSectionTitle(String title) {
-    return Text(
-      title,
-      style: GoogleFonts.poppins(
-        fontSize: 18.sp,
-        fontWeight: FontWeight.w600,
-        color: Colors.white,
-      ),
-    );
-  }
-
-  Widget _buildColorSelection() {
-    if (_colorOptions.isEmpty) {
-      return Text(
-        'Нет доступных цветов',
-        style: GoogleFonts.poppins(
-          fontSize: 14.sp,
-          color: Colors.grey[400],
-        ),
-      );
-    }
-
-    return Wrap(
-      spacing: 12.w,
-      runSpacing: 12.h,
-      children: _colorOptions.map((option) {
-        final colorName = option['color_name']?.toString() ?? '';
-        final isSelected = option['is_active'] == true;
-        return GestureDetector(
-          onTap: () => _onColorChanged(colorName),
-          child: Container(
-            padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 12.h),
-            decoration: BoxDecoration(
-              color: isSelected
-                  ? const Color(0xFF2196F3)
-                  : Colors.transparent,
-              border: Border.all(
-                color: isSelected ? const Color(0xFF2196F3) : Colors.white,
-                width: 1,
-              ),
-              borderRadius: BorderRadius.circular(8.r),
-            ),
-            child: Text(
-              colorName,
-              style: GoogleFonts.poppins(
-                fontSize: 14.sp,
-                color: Colors.white,
-                fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
-              ),
-            ),
-          ),
-        );
-      }).toList(),
-    );
-  }
-
-  Widget _buildStorageSelection() {
-    if (_storageOptions.isEmpty) {
-      return Text(
-        'Нет доступных вариантов памяти',
-        style: GoogleFonts.poppins(
-          fontSize: 14.sp,
-          color: Colors.grey[400],
-        ),
-      );
-    }
-
-    return Wrap(
-      spacing: 12.w,
-      runSpacing: 12.h,
-      children: _storageOptions.map((option) {
-        final storageName = option['storage_name']?.toString() ?? '';
-        final isSelected = option['is_active'] == true;
-        return GestureDetector(
-          onTap: () => _onStorageChanged(storageName),
-          child: Container(
-            padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 12.h),
-            decoration: BoxDecoration(
-              color: isSelected
-                  ? const Color(0xFF2196F3)
-                  : Colors.transparent,
-              border: Border.all(
-                color: isSelected ? const Color(0xFF2196F3) : Colors.white,
-                width: 1,
-              ),
-              borderRadius: BorderRadius.circular(8.r),
-            ),
-            child: Text(
-              storageName,
-              style: GoogleFonts.poppins(
-                fontSize: 14.sp,
-                color: Colors.white,
-                fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
-              ),
-            ),
-          ),
-        );
-      }).toList(),
-    );
-  }
-
-  Widget _buildSimSelection() {
-    if (_simOptions.isEmpty) {
-      return const SizedBox.shrink();
-    }
-
-    return Wrap(
-      spacing: 12.w,
-      runSpacing: 12.h,
-      children: _simOptions.map((option) {
-        final simName = option['sim_card_name']?.toString() ?? '';
-        final isSelected = option['is_active'] == true;
-        return GestureDetector(
-          onTap: () => _onSimChanged(simName),
-          child: Container(
-            padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 12.h),
-            decoration: BoxDecoration(
-              color: isSelected
-                  ? const Color(0xFF2196F3)
-                  : Colors.transparent,
-              border: Border.all(
-                color: isSelected ? const Color(0xFF2196F3) : Colors.white,
-                width: 1,
-              ),
-              borderRadius: BorderRadius.circular(8.r),
-            ),
-            child: Text(
-              simName,
-              style: GoogleFonts.poppins(
-                fontSize: 14.sp,
-                color: Colors.white,
-                fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
-              ),
-            ),
-          ),
-        );
-      }).toList(),
-    );
-  }
-
-  Widget _buildSpecifications() {
-    final characteristics = _currentProduct['characteristics'];
-
-    if (characteristics is! List || characteristics.isEmpty) {
-      return Text(
-        'Характеристики не указаны',
-        style: GoogleFonts.poppins(
-          fontSize: 14.sp,
-          color: Colors.grey[400],
-        ),
-      );
-    }
-
-    return Column(
-      children: characteristics.asMap().entries.map((entry) {
-        final index = entry.key;
-        final characteristic = entry.value as Map<String, dynamic>;
-        final property = characteristic['name_property']?.toString() ?? '';
-        final details = characteristic['details'];
-        final valueText = (details is List && details.isNotEmpty)
-            ? details
-                .whereType<Map>()
-                .map((detail) => detail['value']?.toString().trim() ?? '')
-                .where((value) => value.isNotEmpty)
-                .join(', ')
-            : '-';
-
-        return Column(
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: Text(
-                    property,
-                    style: GoogleFonts.poppins(
-                      fontSize: 14.sp,
-                      color: Colors.white70,
-                    ),
-                  ),
-                ),
-                SizedBox(width: 12.w),
-                Expanded(
-                  child: Text(
-                    valueText,
-                    textAlign: TextAlign.right,
-                    style: GoogleFonts.poppins(
-                      fontSize: 14.sp,
-                      color: Colors.white,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            if (index < characteristics.length - 1)
-              Divider(
-                color: Colors.white.withOpacity(0.1),
-                thickness: 1,
-                height: 16.h,
-              ),
-          ],
-        );
-      }).toList(),
-    );
-  }
-
-  Widget _buildInstallmentPeriod() {
+  Widget _buildInstallmentPeriod(Color textColor, Color borderColor) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final containerColor = isDark ? const Color(0xFF2A2A2A) : Colors.white;
+    
     return GestureDetector(
       onTap: () {
         _showSelectModal();
@@ -616,10 +434,11 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
       child: Container(
         key: _selectKey,
         width: double.infinity,
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(12.r),
-        ),
+      decoration: BoxDecoration(
+        color: containerColor,
+        border: Border.all(color: borderColor, width: 1),
+        borderRadius: BorderRadius.circular(12.r),
+      ),
         padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 16.h),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -628,12 +447,13 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
               installmentPeriod,
               style: GoogleFonts.poppins(
                 fontSize: 16.sp,
-                color: Colors.black,
+                color: textColor,
+                decoration: TextDecoration.none,
               ),
             ),
             Icon(
               Icons.keyboard_arrow_down,
-              color: Colors.black,
+              color: textColor,
             ),
           ],
         ),
@@ -642,6 +462,14 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
   }
 
   void _showSelectModal() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final modalColor = isDark ? const Color(0xFF2A2A2A) : Colors.white;
+    final optionSelectedColor =
+        isDark ? (Colors.grey[700] ?? Colors.grey) : (Colors.grey[200] ?? Colors.grey);
+    final optionBorderColor =
+        isDark ? (Colors.grey[600] ?? Colors.grey) : (Colors.grey[300] ?? Colors.grey);
+    final optionTextColor = isDark ? Colors.white : Colors.black87;
+
     final RenderBox? renderBox = _selectKey.currentContext?.findRenderObject() as RenderBox?;
     final position = renderBox?.localToGlobal(Offset.zero);
     final size = renderBox?.size;
@@ -681,11 +509,11 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
                         maxHeight: screenHeight - (modalTop > 0 ? modalTop : 12) - 20,
                       ),
                       decoration: BoxDecoration(
-                        color: Colors.white,
+                        color: modalColor,
                         borderRadius: BorderRadius.circular(12.r),
                         boxShadow: [
                           BoxShadow(
-                            color: Colors.black.withOpacity(0.2),
+                            color: Colors.black.withOpacity(0.25),
                             blurRadius: 10,
                             offset: Offset(0, 4),
                           ),
@@ -708,18 +536,19 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
                                 width: double.infinity,
                                 padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 16.h),
                                 decoration: BoxDecoration(
-                                  color: isSelected ? Colors.grey[200] : Colors.transparent,
+                                  color: isSelected ? optionSelectedColor : Colors.transparent,
                                   border: Border(
                                     top: period != periods.first
-                                        ? BorderSide(color: Colors.grey[300]!, width: 1)
+                                        ? BorderSide(color: optionBorderColor, width: 1)
                                         : BorderSide.none,
                                   ),
                                 ),
                                 child: Text(
                                   period,
-                                  style: GoogleFonts.poppins(
-                                    fontSize: 16.sp,
-                                    color: Colors.black,
+          style: GoogleFonts.poppins(
+            fontSize: 16.sp,
+                                    color: optionTextColor,
+                                    decoration: TextDecoration.none,
                                   ),
                                 ),
                               ),
@@ -738,7 +567,7 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
     );
   }
 
-  Widget _buildProductImage() {
+  Widget _buildProductImage(Color fallbackBgColor, Color fallbackTextColor) {
     final images = _currentProduct['images'];
     List<String> imageUrls = [];
     if (images is List && images.isNotEmpty) {
@@ -754,12 +583,20 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
     }
 
     if (imageUrls.isEmpty) {
-      return ProductCardHelpers.fallbackImage(
-        _currentProduct['name']?.toString(),
-        const Color(0xFF1A1A1A),
-        Colors.white,
+      return Container(
         width: double.infinity,
         height: 300,
+        decoration: BoxDecoration(
+          color: fallbackBgColor,
+          borderRadius: BorderRadius.circular(12.r),
+        ),
+        child: ProductCardHelpers.fallbackImage(
+          _currentProduct['name']?.toString(),
+          fallbackBgColor,
+          fallbackTextColor,
+          width: double.infinity,
+          height: 300,
+        ),
       );
     }
 
@@ -772,12 +609,45 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
           width: double.infinity,
           height: 300,
           fit: BoxFit.cover,
-          errorBuilder: (_, __, ___) => ProductCardHelpers.fallbackImage(
-            _currentProduct['name']?.toString(),
-            const Color(0xFF1A1A1A),
-            Colors.white,
+          loadingBuilder: (context, child, loadingProgress) {
+            if (loadingProgress == null) {
+              return child;
+            }
+            return Container(
+              width: double.infinity,
+              height: 300,
+              decoration: BoxDecoration(
+                color: Colors.grey[800],
+                borderRadius: BorderRadius.circular(12.r),
+              ),
+              child: Center(
+                child: CircularProgressIndicator(
+                  value: loadingProgress.expectedTotalBytes != null
+                      ? loadingProgress.cumulativeBytesLoaded /
+                          loadingProgress.expectedTotalBytes!
+                      : null,
+                  strokeWidth: 2,
+                  valueColor: const AlwaysStoppedAnimation<Color>(
+                    Color(0xFF1B7EFF),
+                  ),
+                ),
+              ),
+            );
+          },
+          errorBuilder: (_, __, ___) => Container(
             width: double.infinity,
             height: 300,
+            decoration: BoxDecoration(
+              color: fallbackBgColor,
+              borderRadius: BorderRadius.circular(12.r),
+            ),
+            child: ProductCardHelpers.fallbackImage(
+              _currentProduct['name']?.toString(),
+              fallbackBgColor,
+              fallbackTextColor,
+              width: double.infinity,
+              height: 300,
+            ),
           ),
         ),
       );
@@ -786,22 +656,91 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
     return _ProductImageCarousel(
       imageUrls: imageUrls,
       productName: _currentProduct['name']?.toString(),
+      fallbackBgColor: fallbackBgColor,
+      fallbackTextColor: fallbackTextColor,
     );
   }
 
-  int? _parseNumericValue(dynamic value) {
-    if (value == null) return null;
-    if (value is num) return value.round();
-    final sanitized = value.toString().replaceAll(RegExp(r'[^\d]'), '');
-    if (sanitized.isEmpty) return null;
-    return int.tryParse(sanitized);
+  List<ProductOptionViewData> _buildOptionViewData(
+    List<Map<String, dynamic>> options,
+    String key,
+  ) {
+    return options
+        .map((option) => ProductOptionViewData(
+              label: option[key]?.toString() ?? '',
+              isSelected: option['is_active'] == true,
+            ))
+        .where((option) => option.label.isNotEmpty)
+        .toList();
+  }
+
+  List<SpecificationItem> _buildSpecificationItems() {
+    final characteristics = _currentProduct['characteristics'];
+    if (characteristics is! List) return [];
+
+    return characteristics
+        .whereType<Map>()
+        .map((characteristic) {
+          final name = characteristic['name_property']?.toString() ?? '';
+          if (name.isEmpty) return null;
+
+          final details = characteristic['details'];
+          final value = (details is List && details.isNotEmpty)
+              ? details
+                  .whereType<Map>()
+                  .map((detail) => detail['value']?.toString().trim() ?? '')
+                  .where((value) => value.isNotEmpty)
+                  .join(', ')
+              : '-';
+
+          return SpecificationItem(
+            name: name,
+            value: value.isEmpty ? '-' : value,
+          );
+        })
+        .whereType<SpecificationItem>()
+        .toList();
+  }
+
+double? _parseNumericValue(dynamic value) {
+  if (value == null) return null;
+  if (value is num) return value.toDouble();
+
+  final str = value.toString().trim().replaceAll(',', '.');
+  if (str.isEmpty) return null;
+
+  final doubleValue = double.tryParse(str);
+  if (doubleValue != null) return doubleValue;
+
+  final sanitized = str.replaceAll(RegExp(r'[^\d]'), '');
+  if (sanitized.isEmpty) return null;
+  final parsedInt = int.tryParse(sanitized);
+  return parsedInt?.toDouble();
+}
+
+  String _formatUsdAmount(double usdValue) {
+    final isWhole = usdValue == usdValue.roundToDouble();
+    final formattedValue =
+        isWhole ? usdValue.round().toString() : usdValue.toStringAsFixed(2);
+    final parts = formattedValue.split('.');
+    final integerPart = parts[0];
+    final decimalPart = parts.length > 1 ? parts[1] : null;
+    final buffer = StringBuffer();
+    for (int i = 0; i < integerPart.length; i++) {
+      if (i != 0 && (integerPart.length - i) % 3 == 0) {
+        buffer.write(' ');
+      }
+      buffer.write(integerPart[i]);
+    }
+    return decimalPart != null
+        ? '\$${buffer.toString()}.$decimalPart'
+        : '\$${buffer.toString()}';
   }
 
   String _formatPriceValue(dynamic value) {
-    final amount = _parseNumericValue(value) ?? 0;
-    final str = amount.toString();
-    final regex = RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))');
-    return str.replaceAllMapped(regex, (match) => '${match[1]} ');
+    final amount = _parseNumericValue(value);
+    if (amount == null) return _formatUsdAmount(0);
+    return _formatUsdAmount(amount);
   }
 
   String _formatMonthlyPayment() {
@@ -810,18 +749,22 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
       return 'В рассрочку';
     }
     const months = 12;
-    final monthly = (amount / months).ceil();
-    return 'В рассрочку ${_formatPriceValue(monthly)} сум/мес';
+    final monthly = amount / months;
+    return 'В рассрочку ${_formatUsdAmount(monthly)} в мес';
   }
 }
 
 class _ProductImageCarousel extends StatefulWidget {
   final List<String> imageUrls;
   final String? productName;
+  final Color fallbackBgColor;
+  final Color fallbackTextColor;
 
   const _ProductImageCarousel({
     required this.imageUrls,
     this.productName,
+    required this.fallbackBgColor,
+    required this.fallbackTextColor,
   });
 
   @override
@@ -858,12 +801,45 @@ class _ProductImageCarouselState extends State<_ProductImageCarousel> {
                     width: double.infinity,
                     height: 300,
                     fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => ProductCardHelpers.fallbackImage(
-                      widget.productName,
-                      const Color(0xFF1A1A1A),
-                      Colors.white,
+                    loadingBuilder: (context, child, loadingProgress) {
+                      if (loadingProgress == null) {
+                        return child;
+                      }
+                      return Container(
+                        width: double.infinity,
+                        height: 300,
+                        decoration: BoxDecoration(
+                          color: Colors.grey[800],
+                          borderRadius: BorderRadius.circular(12.r),
+                        ),
+                        child: Center(
+                          child: CircularProgressIndicator(
+                            value: loadingProgress.expectedTotalBytes != null
+                                ? loadingProgress.cumulativeBytesLoaded /
+                                    loadingProgress.expectedTotalBytes!
+                                : null,
+                            strokeWidth: 2,
+                            valueColor: const AlwaysStoppedAnimation<Color>(
+                              Color(0xFF1B7EFF),
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                    errorBuilder: (_, __, ___) => Container(
                       width: double.infinity,
                       height: 300,
+                      decoration: BoxDecoration(
+                        color: widget.fallbackBgColor,
+                        borderRadius: BorderRadius.circular(12.r),
+                      ),
+                      child: ProductCardHelpers.fallbackImage(
+                        widget.productName,
+                        widget.fallbackBgColor,
+                        widget.fallbackTextColor,
+                        width: double.infinity,
+                        height: 300,
+                      ),
                     ),
                   ),
                 );
