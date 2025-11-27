@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../services/cart_service.dart';
@@ -375,21 +376,49 @@ class _CartPageState extends State<CartPage>
           SizedBox(height: 12.h),
           
           // Down Payment Input
-          TextFormField(
-            initialValue: _globalDownPayment.toString(),
-            keyboardType: TextInputType.number,
-            decoration: InputDecoration(
-              hintText: '0',
-              suffixText: 'сум',
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8.r),
-              ),
+          Container(
+            width: double.infinity,
+            decoration: BoxDecoration(
+              color: Colors.transparent,
+              border: Border.all(color: textColor, width: 1),
+              borderRadius: BorderRadius.circular(12.r),
             ),
-            onChanged: (value) {
-              setState(() {
-                _globalDownPayment = double.tryParse(value) ?? 0.0;
-              });
-            },
+            child: TextFormField(
+              initialValue: _globalDownPayment == 0.0 ? '' : _globalDownPayment.toInt().toString(),
+              keyboardType: TextInputType.number,
+              inputFormatters: [
+                FilteringTextInputFormatter.digitsOnly,
+                LengthLimitingTextInputFormatter(10),
+              ],
+              textAlign: TextAlign.center,
+              style: GoogleFonts.poppins(
+                color: textColor,
+                fontSize: 16.sp,
+                fontWeight: FontWeight.w500,
+              ),
+              decoration: InputDecoration(
+                border: InputBorder.none,
+                contentPadding: EdgeInsets.symmetric(vertical: 12.h, horizontal: 16.w),
+                hintText: '0',
+                hintStyle: GoogleFonts.poppins(
+                  color: textColor.withOpacity(0.5),
+                  fontSize: 16.sp,
+                ),
+                prefixText: '\$',
+                prefixStyle: GoogleFonts.poppins(
+                  color: textColor,
+                  fontSize: 16.sp,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              onChanged: (value) {
+                final cleanValue = value.replaceAll(RegExp(r'[^\d]'), '');
+                final intValue = cleanValue.isEmpty ? 0 : int.tryParse(cleanValue) ?? 0;
+                setState(() {
+                  _globalDownPayment = intValue.toDouble();
+                });
+              },
+            ),
           ),
           
           SizedBox(height: 16.h),
@@ -414,27 +443,37 @@ class _CartPageState extends State<CartPage>
           ),
           SizedBox(height: 12.h),
           
-          // Tariff Dropdown
-          DropdownButtonFormField<Map<String, dynamic>>(
-            value: _selectedGlobalTariff,
-            decoration: InputDecoration(
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8.r),
+          // Tariff Selector
+          GestureDetector(
+            onTap: () {
+              _showGlobalTariffModal();
+            },
+            child: Container(
+              width: double.infinity,
+              decoration: BoxDecoration(
+                color: Colors.transparent,
+                border: Border.all(color: textColor, width: 1),
+                borderRadius: BorderRadius.circular(12.r),
+              ),
+              padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 16.h),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    _getSelectedTariffName(),
+                    style: GoogleFonts.poppins(
+                      fontSize: 16.sp,
+                      color: textColor,
+                      decoration: TextDecoration.none,
+                    ),
+                  ),
+                  Icon(
+                    Icons.keyboard_arrow_down,
+                    color: textColor,
+                  ),
+                ],
               ),
             ),
-            items: _tariffs.map((tariff) {
-              return DropdownMenuItem<Map<String, dynamic>>(
-                value: tariff,
-                child: Text(_formatTariffName(tariff['name'] ?? '')),
-              );
-            }).toList(),
-            onChanged: (Map<String, dynamic>? newValue) {
-              if (newValue != null) {
-                setState(() {
-                  _selectedGlobalTariff = newValue;
-                });
-              }
-            },
           ),
           
           SizedBox(height: 20.h),
@@ -463,10 +502,10 @@ class _CartPageState extends State<CartPage>
                 ),
                 SizedBox(height: 8.h),
                 _buildSummaryRow('Стоимость товаров:', _formatUsdAmount(total), textColor),
-                _buildSummaryRow('Первоначальный взнос:', '${_globalDownPayment.toStringAsFixed(0)} сум', textColor),
-                _buildSummaryRow('Общий ежемесячный платеж:', '${monthlyPayment.toStringAsFixed(0)} сум', textColor, isHighlighted: true),
+                _buildSummaryRow('Первоначальный взнос:', _formatUsdAmount(_globalDownPayment), textColor),
+                _buildSummaryRow('Общий ежемесячный платеж:', _formatUsdAmount(monthlyPayment), textColor, isHighlighted: true),
                 if (_globalDownPayment > 0)
-                  _buildSummaryRow('Минимальный взнос:', '${(total * 0.1).toStringAsFixed(0)} сум', textColor.withOpacity(0.7)),
+                  _buildSummaryRow('Минимальный взнос:', _formatUsdAmount(total * 0.1), textColor.withOpacity(0.7)),
               ],
             ),
           ),
@@ -512,45 +551,54 @@ class _CartPageState extends State<CartPage>
             ),
           ),
           SizedBox(height: 12.h),
-          TextFormField(
-            initialValue: globalDownPayment == 0.0 ? '' : globalDownPayment.toStringAsFixed(0),
-            keyboardType: TextInputType.number,
-            style: GoogleFonts.poppins(
-              fontSize: 18.sp,
-              fontWeight: FontWeight.w600,
-              color: textColor,
+          Container(
+            width: double.infinity,
+            decoration: BoxDecoration(
+              color: Colors.transparent,
+              border: Border.all(color: textColor, width: 1),
+              borderRadius: BorderRadius.circular(12.r),
             ),
-            decoration: InputDecoration(
-              hintText: '500000',
-              hintStyle: GoogleFonts.poppins(
-                fontSize: 18.sp,
-                fontWeight: FontWeight.w600,
-                color: Colors.grey[400],
+            child: TextFormField(
+              initialValue: globalDownPayment == 0.0 ? '' : globalDownPayment.toInt().toString(),
+              keyboardType: TextInputType.number,
+              inputFormatters: [
+                FilteringTextInputFormatter.digitsOnly,
+                LengthLimitingTextInputFormatter(10),
+              ],
+              textAlign: TextAlign.center,
+              style: GoogleFonts.poppins(
+                color: textColor,
+                fontSize: 16.sp,
+                fontWeight: FontWeight.w500,
               ),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12.r),
-                borderSide: BorderSide(color: Colors.grey[300]!),
+              decoration: InputDecoration(
+                border: InputBorder.none,
+                contentPadding: EdgeInsets.symmetric(vertical: 12.h, horizontal: 16.w),
+                hintText: '0',
+                hintStyle: GoogleFonts.poppins(
+                  color: textColor.withOpacity(0.5),
+                  fontSize: 16.sp,
+                ),
+                prefixText: '\$',
+                prefixStyle: GoogleFonts.poppins(
+                  color: textColor,
+                  fontSize: 16.sp,
+                  fontWeight: FontWeight.w500,
+                ),
               ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12.r),
-                borderSide: BorderSide(color: Colors.grey[300]!),
-              ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12.r),
-                borderSide: BorderSide(color: const Color(0xFF4E63EC)),
-              ),
-              contentPadding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 16.h),
+              onChanged: (value) {
+                final cleanValue = value.replaceAll(RegExp(r'[^\d]'), '');
+                final intValue = cleanValue.isEmpty ? 0 : int.tryParse(cleanValue) ?? 0;
+                setState(() {
+                  // Apply the same down payment to all items in complex mode
+                  final downPayment = intValue.toDouble();
+                  for (final item in cartItems) {
+                    final uniqueId = item['uniqueId'] as String;
+                    _itemDownPayments[uniqueId] = downPayment;
+                  }
+                });
+              },
             ),
-            onChanged: (value) {
-              setState(() {
-                // Apply the same down payment to all items in complex mode
-                final downPayment = double.tryParse(value) ?? 0.0;
-                for (final item in cartItems) {
-                  final uniqueId = item['uniqueId'] as String;
-                  _itemDownPayments[uniqueId] = downPayment;
-                }
-              });
-            },
           ),
           
           SizedBox(height: 20.h),
@@ -850,9 +898,7 @@ class _CartPageState extends State<CartPage>
           
           // Calculation Section
           if (_isSimpleMode) 
-            _buildSimpleModeCalculation(textColor, cardColor)
-          else
-            _buildComplexModeCalculation(textColor, cardColor),
+            _buildSimpleModeCalculation(textColor, cardColor),
           
           SizedBox(height: 24.h),
           // Order Button (not fixed)
@@ -1026,6 +1072,12 @@ class _CartPageState extends State<CartPage>
                   ),
                 ],
               ),
+              
+              // Complex Mode Fields
+              if (!_isSimpleMode) ...[
+                SizedBox(height: 16.h),
+                _buildComplexModeItemFields(item, textColor, borderColor),
+              ],
             ],
           ),
           // Delete Button - Top Right
@@ -1168,16 +1220,7 @@ class _CartPageState extends State<CartPage>
         throw Exception('Failed to get session ID from MyID API: ${apiError.toString()}');
       }
 
-      // Step 2: Start MyID SDK with session_id from backend
-      // SDK will:
-      //   1. Open camera
-      //   2. Capture image (face detection, passport scan)
-      //   3. Send image to MyID servers for verification
-      //   4. Return code (authorization code)
-      print('🚀 Step 2: Starting MyID SDK with session ID: $sessionId');
-      print(
-        '📸 SDK will open camera, capture image, and send to MyID servers for verification',
-      );
+  
 
       // Debug: Print session ID details
       print('🔍 Session ID details:');
@@ -1198,11 +1241,6 @@ class _CartPageState extends State<CartPage>
 
       // Step 3: SDK returned code (image was captured and verified by MyID servers)
       if (result.code != null) {
-        print('✅ Step 3: MyID SDK - Authentication successful');
-        print('📋 Code received: ${result.code}');
-        print('📸 Image: ${result.image != null ? "present" : "null"}');
-        print('🔢 Comparison value: ${result.comparisonValue}');
-
         CustomToast.show(
           context,
           message: 'Авторизация успешна. Оформление заказа...',
@@ -1215,9 +1253,6 @@ class _CartPageState extends State<CartPage>
           // Get fresh access token for backend testing
           final accessToken = await MyIdService.getAccessToken();
           
-          print('✅ Access token obtained for debug page');
-          print('📋 Code: ${result.code}');
-          print('🔑 Access Token: ${accessToken.substring(0, 20)}...');
           
           CustomToast.show(
             context,
@@ -1232,18 +1267,7 @@ class _CartPageState extends State<CartPage>
             isSuccess: true,
           );
           
-          // TODO: When backend is ready, replace debug page with actual order processing:
-          // final userData = await MyIdService.getUserDataByCode(result.code!);
-          // final orderResponse = await ApiService.request(
-          //   url: 'order/place/',
-          //   method: 'POST',
-          //   data: {
-          //     'cart_items': cartItems.map(...).toList(),
-          //     'user_data': userData,
-          //     'myid_code': result.code,
-          //     'myid_image': result.image,
-          //   },
-          // );
+        
           
         } catch (e) {
           print('❌ Error getting access token: $e');
@@ -1289,5 +1313,412 @@ class _CartPageState extends State<CartPage>
         });
       }
     }
+  }
+
+  Widget _buildComplexModeItemFields(Map<String, dynamic> item, Color textColor, Color borderColor) {
+    final uniqueId = item['uniqueId'] as String;
+    final currentDownPayment = _itemDownPayments[uniqueId] ?? 0.0;
+    final currentTariff = _itemTariffs[uniqueId];
+    
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Down Payment Field
+        Text(
+          'Первоначальный взнос',
+          style: GoogleFonts.poppins(
+            fontSize: 14.sp,
+            fontWeight: FontWeight.w600,
+            color: textColor,
+          ),
+        ),
+        SizedBox(height: 8.h),
+        Container(
+          width: double.infinity,
+          decoration: BoxDecoration(
+            color: Colors.transparent,
+            border: Border.all(color: borderColor, width: 1),
+            borderRadius: BorderRadius.circular(12.r),
+          ),
+          child: TextFormField(
+            initialValue: currentDownPayment == 0.0 ? '' : currentDownPayment.toInt().toString(),
+            keyboardType: TextInputType.number,
+            inputFormatters: [
+              FilteringTextInputFormatter.digitsOnly,
+              LengthLimitingTextInputFormatter(10),
+            ],
+            textAlign: TextAlign.center,
+            style: GoogleFonts.poppins(
+              color: textColor,
+              fontSize: 14.sp,
+              fontWeight: FontWeight.w500,
+            ),
+            decoration: InputDecoration(
+              border: InputBorder.none,
+              contentPadding: EdgeInsets.symmetric(vertical: 10.h, horizontal: 12.w),
+              hintText: '0',
+              hintStyle: GoogleFonts.poppins(
+                color: textColor.withOpacity(0.5),
+                fontSize: 14.sp,
+              ),
+              prefixText: '\$',
+              prefixStyle: GoogleFonts.poppins(
+                color: textColor,
+                fontSize: 14.sp,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            onChanged: (value) {
+              final cleanValue = value.replaceAll(RegExp(r'[^\d]'), '');
+              final intValue = cleanValue.isEmpty ? 0 : int.tryParse(cleanValue) ?? 0;
+              
+              // Get product price and set as maximum
+              final productPrice = (_parsePriceValue(item['price']) ?? 0).toInt();
+              final clampedValue = intValue.clamp(0, productPrice);
+              
+              setState(() {
+                _itemDownPayments[uniqueId] = clampedValue.toDouble();
+              });
+            },
+          ),
+        ),
+        
+        SizedBox(height: 16.h),
+        
+        // Tariff Selection
+        Text(
+          'Срок рассрочки',
+          style: GoogleFonts.poppins(
+            fontSize: 14.sp,
+            fontWeight: FontWeight.w600,
+            color: textColor,
+          ),
+        ),
+        SizedBox(height: 8.h),
+        GestureDetector(
+          onTap: () => _showItemTariffModal(uniqueId, currentTariff),
+          child: Container(
+            width: double.infinity,
+            decoration: BoxDecoration(
+              color: Colors.transparent,
+              border: Border.all(color: borderColor, width: 1),
+              borderRadius: BorderRadius.circular(12.r),
+            ),
+            padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  currentTariff != null 
+                      ? _formatTariffName(currentTariff['name'] ?? '')
+                      : 'Выберите срок',
+                  style: GoogleFonts.poppins(
+                    fontSize: 14.sp,
+                    color: textColor,
+                  ),
+                ),
+                Icon(
+                  Icons.keyboard_arrow_down,
+                  color: textColor,
+                  size: 20.w,
+                ),
+              ],
+            ),
+          ),
+        ),
+        
+      ],
+    );
+  }
+
+  void _showItemTariffModal(String uniqueId, Map<String, dynamic>? currentTariff) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final modalColor = isDark ? const Color(0xFF2A2A2A) : Colors.white;
+    final optionTextColor = isDark ? Colors.white : Colors.black87;
+    final screenHeight = MediaQuery.of(context).size.height;
+    final screenWidth = MediaQuery.of(context).size.width;
+
+    showDialog(
+      context: context,
+      barrierColor: Colors.black.withOpacity(0.5),
+      builder: (BuildContext dialogContext) {
+        return GestureDetector(
+          onTap: () {
+            Navigator.of(dialogContext).pop();
+          },
+          child: Scaffold(
+            backgroundColor: Colors.transparent,
+            body: Center(
+              child: GestureDetector(
+                onTap: () {}, // Prevent closing when tapping inside modal
+                child: Container(
+                  width: screenWidth * 0.8,
+                  constraints: BoxConstraints(
+                    maxHeight: screenHeight * 0.7,
+                  ),
+                  decoration: BoxDecoration(
+                    color: modalColor,
+                    borderRadius: BorderRadius.circular(16.r),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.25),
+                        blurRadius: 20,
+                        offset: Offset(0, 8),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Header
+                      Container(
+                        padding: EdgeInsets.all(20.w),
+                        decoration: BoxDecoration(
+                          border: Border(
+                            bottom: BorderSide(
+                              color: isDark ? Colors.grey[600]! : Colors.grey[300]!,
+                              width: 1,
+                            ),
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              'Срок рассрочки',
+                              style: GoogleFonts.poppins(
+                                fontSize: 18.sp,
+                                fontWeight: FontWeight.w600,
+                                color: optionTextColor,
+                              ),
+                            ),
+                            GestureDetector(
+                              onTap: () => Navigator.of(dialogContext).pop(),
+                              child: Icon(
+                                Icons.close,
+                                color: optionTextColor,
+                                size: 24.w,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      
+                      // Scrollable tariff list
+                      Flexible(
+                        child: SingleChildScrollView(
+                          child: Column(
+                            children: _tariffs.map((tariff) {
+                              final isSelected = currentTariff != null && 
+                                  currentTariff['id'] == tariff['id'];
+                              
+                              return GestureDetector(
+                                onTap: () {
+                                  setState(() {
+                                    _itemTariffs[uniqueId] = tariff;
+                                  });
+                                  Navigator.of(dialogContext).pop();
+                                },
+                                child: Container(
+                                  width: double.infinity,
+                                  padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 16.h),
+                                  decoration: BoxDecoration(
+                                    color: isSelected 
+                                        ? (isDark ? Colors.green.withOpacity(0.1) : Colors.green.withOpacity(0.05))
+                                        : Colors.transparent,
+                                    border: Border(
+                                      bottom: tariff != _tariffs.last
+                                          ? BorderSide(
+                                              color: isDark ? Colors.grey[700]! : Colors.grey[200]!,
+                                              width: 0.5,
+                                            )
+                                          : BorderSide.none,
+                                    ),
+                                  ),
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          _formatTariffName(tariff['name'] ?? ''),
+                                          style: GoogleFonts.poppins(
+                                            fontSize: 16.sp,
+                                            fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                                            color: isSelected ? Colors.green : optionTextColor,
+                                          ),
+                                        ),
+                                      ),
+                                      if (isSelected)
+                                        Icon(
+                                          Icons.check_circle,
+                                          color: Colors.green,
+                                          size: 24.w,
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  String _getSelectedTariffName() {
+    if (_selectedGlobalTariff == null || _tariffs.isEmpty) {
+      return 'Выберите срок';
+    }
+    
+    return _formatTariffName(_selectedGlobalTariff!['name'] ?? '');
+  }
+
+  void _showGlobalTariffModal() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final modalColor = isDark ? const Color(0xFF2A2A2A) : Colors.white;
+    final optionTextColor = isDark ? Colors.white : Colors.black87;
+    final screenHeight = MediaQuery.of(context).size.height;
+    final screenWidth = MediaQuery.of(context).size.width;
+
+    showDialog(
+      context: context,
+      barrierColor: Colors.black.withOpacity(0.5),
+      builder: (BuildContext dialogContext) {
+        return GestureDetector(
+          onTap: () {
+            Navigator.of(dialogContext).pop();
+          },
+          child: Scaffold(
+            backgroundColor: Colors.transparent,
+            body: Center(
+              child: GestureDetector(
+                onTap: () {}, // Prevent closing when tapping inside modal
+                child: Container(
+                  width: screenWidth * 0.8,
+                  constraints: BoxConstraints(
+                    maxHeight: screenHeight * 0.7,
+                  ),
+                  decoration: BoxDecoration(
+                    color: modalColor,
+                    borderRadius: BorderRadius.circular(16.r),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.25),
+                        blurRadius: 20,
+                        offset: Offset(0, 8),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Header
+                      Container(
+                        padding: EdgeInsets.all(20.w),
+                        decoration: BoxDecoration(
+                          border: Border(
+                            bottom: BorderSide(
+                              color: isDark ? Colors.grey[600]! : Colors.grey[300]!,
+                              width: 1,
+                            ),
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              'Срок рассрочки',
+                              style: GoogleFonts.poppins(
+                                fontSize: 18.sp,
+                                fontWeight: FontWeight.w600,
+                                color: optionTextColor,
+                              ),
+                            ),
+                            GestureDetector(
+                              onTap: () => Navigator.of(dialogContext).pop(),
+                              child: Icon(
+                                Icons.close,
+                                color: optionTextColor,
+                                size: 24.w,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      
+                      // Scrollable tariff list
+                      Flexible(
+                        child: SingleChildScrollView(
+                          child: Column(
+                            children: _tariffs.map((tariff) {
+                              final isSelected = _selectedGlobalTariff == tariff;
+                              
+                              return GestureDetector(
+                                onTap: () {
+                                  setState(() {
+                                    _selectedGlobalTariff = tariff;
+                                  });
+                                  Navigator.of(dialogContext).pop();
+                                },
+                                child: Container(
+                                  width: double.infinity,
+                                  padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 16.h),
+                                  decoration: BoxDecoration(
+                                    color: isSelected 
+                                        ? (isDark ? Colors.green.withOpacity(0.1) : Colors.green.withOpacity(0.05))
+                                        : Colors.transparent,
+                                    border: Border(
+                                      bottom: tariff != _tariffs.last
+                                          ? BorderSide(
+                                              color: isDark ? Colors.grey[700]! : Colors.grey[200]!,
+                                              width: 0.5,
+                                            )
+                                          : BorderSide.none,
+                                    ),
+                                  ),
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          _formatTariffName(tariff['name'] ?? ''),
+                                          style: GoogleFonts.poppins(
+                                            fontSize: 16.sp,
+                                            fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                                            color: isSelected ? Colors.green : optionTextColor,
+                                          ),
+                                        ),
+                                      ),
+                                      if (isSelected)
+                                        Icon(
+                                          Icons.check_circle,
+                                          color: Colors.green,
+                                          size: 24.w,
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
   }
 }
