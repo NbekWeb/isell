@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">isell</string>
+    
+    <!-- MyID SDK permission descriptions -->
+    <string name="camera_permission_description">Required for document and facial capture</string>
+</resources>

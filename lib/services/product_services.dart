@@ -10,13 +10,13 @@ class ProductServices {
   }) async {
     try {
       final Response response = await ApiService.request(
-        url: 'products/',
+        url: 'product/',
         method: 'GET',
         queryParameters: {
           if (name != null && name.isNotEmpty) 'name': name,
           if (category != null) 'category': category,
           'page': page,
-          'page_size': 10
+          'page_size': 10,
         },
       );
 
@@ -24,17 +24,23 @@ class ProductServices {
 
       if (data is Map<String, dynamic>) {
         final results = data['results'] ?? [];
-        final totalPages = data['total_pages'] ?? 1;
-        
+        final count = data['count'] ?? 0;
+        final next = data['next'];
+        final previous = data['previous'];
+
         return {
           'results': results is List
               ? results
-                  .map<Map<String, dynamic>>(
-                    (item) => Map<String, dynamic>.from(item as Map),
-                  )
-                  .toList()
+                    .map<Map<String, dynamic>>(
+                      (item) => Map<String, dynamic>.from(item as Map),
+                    )
+                    .toList()
               : <Map<String, dynamic>>[],
-          'total_pages': totalPages is int ? totalPages : 1,
+          'count': count is int ? count : 0,
+          'next': next,
+          'previous': previous,
+          'has_next': next != null,
+          'has_previous': previous != null,
         };
       }
     } catch (_) {
@@ -43,7 +49,11 @@ class ProductServices {
 
     return {
       'results': <Map<String, dynamic>>[],
-      'total_pages': 1,
+      'count': 0,
+      'next': null,
+      'previous': null,
+      'has_next': false,
+      'has_previous': false,
     };
   }
 
@@ -55,16 +65,20 @@ class ProductServices {
   }) async {
     try {
       final Response response = await ApiService.request(
-        url: 'products/$productId/filter/',
+        url: 'product/$productId',
         method: 'GET',
         queryParameters: {
-          if (colorName != null && colorName.isNotEmpty) 'color_name': colorName,
-          if (storageName != null && storageName.isNotEmpty) 'storage_name': storageName,
-          if (simCardName != null && simCardName.isNotEmpty) 'sim_card_name': simCardName,
+          if (colorName != null && colorName.isNotEmpty)
+            'color_name': colorName,
+          if (storageName != null && storageName.isNotEmpty)
+            'storage_name': storageName,
+          if (simCardName != null && simCardName.isNotEmpty)
+            'sim_card_name': simCardName,
         },
       );
 
       final data = response.data;
+      print('🔵 Product Filter API Response Data: ${data}');
 
       if (data is Map<String, dynamic>) {
         return data;
@@ -78,26 +92,47 @@ class ProductServices {
 
   static Future<List<Map<String, dynamic>>> getBanners() async {
     try {
+      print('🔵 Fetching banners from API...');
       final Response response = await ApiService.request(
-        url: 'products/banners/',
+        url: 'info/banners/',
         method: 'GET',
       );
+
+      print('📥 Banner API Response Status: ${response.statusCode}');
+      print('📥 Banner API Response Data: ${response.data}');
 
       final data = response.data;
 
       if (data is List) {
-        final banners = data
+        print('✅ Banner data is List, length: ${data.length}');
+        final allBanners = data
             .map<Map<String, dynamic>>(
               (item) => Map<String, dynamic>.from(item as Map),
             )
+            .toList();
+
+        print('📋 All banners (before filtering): ${allBanners.length}');
+        for (var banner in allBanners) {
+          print(
+            '   - Banner ID: ${banner['id']}, is_active: ${banner['is_active']}, image: ${banner['image']}',
+          );
+        }
+
+        final banners = allBanners
             .where((banner) => banner['is_active'] == true)
             .toList();
 
+        print('✅ Active banners: ${banners.length}');
+
         // Sort banners: if all orders are 0, sort by id; otherwise sort by order
-        final allOrdersZero = banners.every((b) => (b['order'] as int? ?? 0) == 0);
-        
+        final allOrdersZero = banners.every(
+          (b) => (b['order'] as int? ?? 0) == 0,
+        );
+
         if (allOrdersZero) {
-          banners.sort((a, b) => (a['id'] as int? ?? 0).compareTo(b['id'] as int? ?? 0));
+          banners.sort(
+            (a, b) => (a['id'] as int? ?? 0).compareTo(b['id'] as int? ?? 0),
+          );
         } else {
           banners.sort((a, b) {
             final orderA = a['order'] as int? ?? 0;
@@ -108,24 +143,41 @@ class ProductServices {
           });
         }
 
+        print('✅ Returning ${banners.length} banners');
         return banners;
+      } else {
+        print('❌ Banner data is not a List, type: ${data.runtimeType}');
       }
-    } catch (_) {
-      // ignore
+    } catch (e, stackTrace) {
+      print('❌ Error fetching banners: $e');
+      print('❌ Stack trace: $stackTrace');
     }
 
+    print('⚠️ Returning empty banner list');
     return <Map<String, dynamic>>[];
   }
 
   static Future<List<Map<String, dynamic>>> getCategories() async {
     try {
       final Response response = await ApiService.request(
-        url: 'products/categories/',
+        url: 'product/categories/',
         method: 'GET',
       );
 
       final data = response.data;
+      print('🔵 Categories API Response Data: ${data}');
 
+      // Handle new structure with results array
+      if (data is Map<String, dynamic> && data['results'] is List) {
+        final results = data['results'] as List;
+        return results
+            .map<Map<String, dynamic>>(
+              (item) => Map<String, dynamic>.from(item as Map),
+            )
+            .toList();
+      }
+
+      // Fallback to old structure (direct list)
       if (data is List) {
         return data
             .map<Map<String, dynamic>>(
@@ -139,5 +191,76 @@ class ProductServices {
 
     return <Map<String, dynamic>>[];
   }
-}
 
+  static Future<List<Map<String, dynamic>>> getTariffs() async {
+    try {
+      final Response response = await ApiService.request(
+        url: 'product/tariffs/',
+        method: 'GET',
+      );
+
+      final data = response.data;
+      print('🔵 Tariffs API Response Data: ${data}');
+      if (data is List) {
+        // Filter only active tariffs and maintain API order
+        final activeTariffs = data
+            .where(
+              (tariff) => tariff['is_active'] == true,
+            )
+            .map<Map<String, dynamic>>(
+              (item) => Map<String, dynamic>.from(item as Map),
+            )
+            .toList();
+
+        // Return tariffs in the same order as API (no sorting)
+        return activeTariffs;
+      }
+    } catch (e) {
+      print('❌ Error fetching tariffs: $e');
+    }
+
+    return <Map<String, dynamic>>[];
+  }
+
+  static Future<dynamic> calculateMonthlyPayment({
+    required String productId,
+    required int advancePayment,
+    required int tariffId,
+    int? variationId,
+  }) async {
+    try {
+      final queryParams = {
+        'advance_payment': advancePayment,
+        'tariff': tariffId,
+        'product_id': productId,
+      };
+
+      // Add variation_id only if it's provided
+      if (variationId != null) {
+        queryParams['variation_id'] = variationId;
+      }
+
+      print('🔵 Calculate API Request: product/$productId/calculate/ with params: $queryParams');
+
+      final Response response = await ApiService.request(
+        url: 'product/$productId/calculate/',
+        method: 'GET',
+        queryParameters: queryParams,
+      );
+
+      final data = response.data;
+      print('🔵 Calculate API Response: ${data}');
+
+      // Handle both List and Map responses
+      if (data is List || data is Map<String, dynamic>) {
+        return data;
+      }
+    } catch (e) {
+      print('❌ Error calculating monthly payment for tariff $tariffId: $e');
+      // Return a fallback response to prevent UI issues
+      return null;
+    }
+
+    return null;
+  }
+}

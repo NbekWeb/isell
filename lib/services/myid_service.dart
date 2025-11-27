@@ -1,285 +1,387 @@
-import 'dart:async';
-
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
+import 'package:dio/dio.dart';
 
 class MyIdService {
-  MyIdService._internal() {
-    _channel.setMethodCallHandler(_handleNativeCallback);
-  }
-
-  static final MyIdService _instance = MyIdService._internal();
-
-  factory MyIdService() => _instance;
-
-  static const MethodChannel _channel = MethodChannel('com.isell.myid/sdk');
-
-  static final StreamController<MyIdSdkEvent> _eventController =
-      StreamController<MyIdSdkEvent>.broadcast();
-
-  Stream<MyIdSdkEvent> get events => _eventController.stream;
-
-  Future<MyIdFlowResult> start(MyIdConfig config) async {
-    final payload = await _channel.invokeMethod<dynamic>(
-      'startMyId',
-      config.toJson(),
-    );
-
-    if (payload is! Map) {
-      throw PlatformException(
-        code: 'unexpected_response',
-        message: 'MyID SDK returned an unexpected response',
-        details: payload,
+  static const MethodChannel _channel = MethodChannel('com.isell.myid');
+  
+  // MyID API credentials
+  static const String _myIdApiBaseUrl = 'https://api.devmyid.uz';
+  static const String _clientId = 'isell_sdk-0cnI1vDHIIqviRG8dazTki3ZdDHYS1B1iVTHiLaR';
+  static const String _clientSecret = '9BVl7IpGc48adw3k69lScOJjKQGyGt2lNeJ88wEFQLK5m9cDf8GjGKP9oEpuj1eGLlVjX5PNirHcYEHawwoicJ5fUyHGMHZYD3K5';
+  static const String _clientHashId = '7a727145-23da-4d42-8f3b-cdd032635a41';
+  static const String _clientHash = '''MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsFW3jedThVNXeYv6DFQ4
+3NBBf5kO0yivQrZQ/GKqz64DxhDOj6li+bfGBa9np35W09RoqLYd2r8eIRYK43lx
+YTS+dA3KJxR1R6ZaoCEEQgkc9EjbfNmmsz/TWyD+WT82F7m8fccD/dyzOF8OEFJr
+sQlX+X/7iOtcSY+2vK9zGLR+tGig0m+WWhG7DUDyzOp8HWEcBx9arzlBsyvYuP6F
+fOnR03eaLfHD8wuGC6I3W5POwtD1oSM6Xxwu+SZkkdVU6dADcL8CIP37AIV7K+JY
+VEqExBsRrrJR7vINTPl+Oof1bDqnaIIjdOZRN7FAcJgQFRfvbXf7koYfx8GuyH5V
+NwIDAQAB''';
+  
+  // Public getters for SDK credentials
+  static String get clientHash => _clientHash;
+  static String get clientHashId => _clientHashId;
+  
+  static final Dio _dio = Dio(BaseOptions(
+    baseUrl: _myIdApiBaseUrl,
+    connectTimeout: const Duration(seconds: 30),
+    receiveTimeout: const Duration(seconds: 30),
+  ));
+  
+  /// Get Access Token from MyID API
+  /// POST https://api.devmyid.uz/api/v1/auth/clients/access-token
+  static Future<String> getAccessToken() async {
+    try {
+      final url = '$_myIdApiBaseUrl/api/v1/auth/clients/access-token';
+      print('🔵 MyID API - Getting Access Token');
+      print('📍 URL: $url');
+      print('📤 Request Data: {client_id: $_clientId, client_secret: ***hidden***}');
+      
+      final response = await _dio.post(
+        '/api/v1/auth/clients/access-token',
+        data: {
+          'client_id': _clientId,
+          'client_secret': _clientSecret,
+        },
+        options: Options(
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        ),
       );
+      
+      print('📥 Access Token Response Status: ${response.statusCode}');
+      print('📥 Access Token Response Data: ${response.data}');
+      
+      if (response.data != null && response.data['access_token'] != null) {
+        final accessToken = response.data['access_token'] as String;
+        print('✅ Access Token received: ${accessToken.substring(0, 20)}...');
+        return accessToken;
+      }
+      
+      throw Exception('Access token not found in response');
+    } catch (e) {
+      print('❌ Access Token Error: $e');
+      if (e is DioException && e.response != null) {
+        print('❌ Error Response Status: ${e.response?.statusCode}');
+        print('❌ Error Response Data: ${e.response?.data}');
+      }
+      throw Exception('Failed to get access token: ${e.toString()}');
     }
-
-    final data = payload.map((key, value) => MapEntry(key.toString(), value));
-
-    final status = _parseStatus(data['status']);
-
-
-    return MyIdFlowResult(
-      status: status,
-      code: data['code']?.toString(),
-      reuid: data['reuid']?.toString(),
-      comparisonValue: data['comparisonValue'],
-      imageBase64: data['imageBase64']?.toString(),
-      errorCode: status == MyIdFlowStatus.error
-          ? data['code']?.toString()
-          : null,
-      errorMessage: status == MyIdFlowStatus.error
-          ? data['message']?.toString()
-          : null,
-      raw: Map<String, dynamic>.from(data),
-    );
+  }
+  
+  /// Get session ID from MyID API
+  /// POST https://api.devmyid.uz/api/v1/sdk/sessions
+  /// 
+  /// Parameters:
+  /// - phoneNumber: Optional phone number in format 998901234567
+  /// - birthDate: Optional birth date in format YYYY-MM-DD
+  /// - isResident: Optional, default is true
+  /// - passData: Optional passport data (use either passData or pinfl)
+  /// - pinfl: Optional 14-digit PINFL (use either passData or pinfl)
+  static Future<String> getSessionId({
+    String? phoneNumber,
+    String? birthDate,
+    bool? isResident,
+    String? passData,
+    String? pinfl,
+  }) async {
+    try {
+      // Step 1: Get access token
+      final accessToken = await getAccessToken();
+      
+      // Step 2: Create session
+      final requestData = <String, dynamic>{
+        'client_hash_id': _clientHashId, // Required for SDK session validation
+      };
+      if (phoneNumber != null) requestData['phone_number'] = phoneNumber;
+      if (birthDate != null) requestData['birth_date'] = birthDate;
+      if (isResident != null) requestData['is_resident'] = isResident;
+      if (passData != null) requestData['pass_data'] = passData;
+      if (pinfl != null) requestData['pinfl'] = pinfl;
+      
+      final url = '$_myIdApiBaseUrl/api/v1/sdk/sessions';
+      print('🔵 MyID API - Creating Session');
+      print('📍 URL: $url');
+      print('📤 Request Data: $requestData');
+      print('🔑 Authorization: Bearer ${accessToken.substring(0, 20)}...');
+      
+      final response = await _dio.post(
+        '/api/v1/sdk/sessions',
+        data: requestData,
+        options: Options(
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer $accessToken',
+          },
+        ),
+      );
+      
+      print('📥 Session Response Status: ${response.statusCode}');
+      print('📥 Session Response Data: ${response.data}');
+      
+      if (response.data != null && response.data['session_id'] != null) {
+        final sessionId = response.data['session_id'] as String;
+        print('✅ Session ID received: $sessionId');
+        return sessionId;
+      }
+      
+      throw Exception('Session ID not found in response');
+    } catch (e) {
+      print('❌ Session Error: $e');
+      if (e is DioException && e.response != null) {
+        print('❌ Error Response Status: ${e.response?.statusCode}');
+        print('❌ Error Response Data: ${e.response?.data}');
+      }
+      throw Exception('Failed to get session ID: ${e.toString()}');
+    }
   }
 
-  Future<void> _handleNativeCallback(MethodCall call) async {
-    if (call.method == 'myIdEvent') {
-      final args = call.arguments;
-      if (args is Map) {
-        final data = args.map((key, value) => MapEntry(key.toString(), value));
-        _eventController.add(
-          MyIdSdkEvent(name: data['event']?.toString() ?? '', payload: data),
+  /// Get user data from MyID API using code
+  /// GET https://api.devmyid.uz/api/v1/sdk/data?code={code}
+  /// 
+  /// Returns user data including:
+  /// - first_name, last_name, middle_name
+  /// - birth_date
+  /// - pinfl
+  /// - passport_series, passport_number
+  /// - phone_number
+  /// - and other user information
+  /// 
+  /// Get user data from MyID API using code (for frontend testing)
+  /// GET https://api.devmyid.uz/api/v1/sdk/data?code={code}
+  /// 
+  /// Returns user data including:
+  /// - first_name, last_name, middle_name
+  /// - birth_date
+  /// - pinfl
+  /// - passport_series, passport_number
+  /// - phone_number
+  /// - and other user information
+  static Future<Map<String, dynamic>> getUserDataByCode(String code) async {
+    try {
+      // Step 1: Get access token
+      final accessToken = await getAccessToken();
+      
+      final url = '$_myIdApiBaseUrl/api/v1/sdk/data';
+      print('🔵 MyID API - Getting User Data by Code (Frontend Test)');
+      print('📍 URL: $url');
+      print('📤 Code: $code');
+      print('🔑 Authorization: Bearer ${accessToken.substring(0, 20)}...');
+      
+      final response = await _dio.get(
+        '/api/v1/sdk/data',
+        queryParameters: {'code': code},
+        options: Options(
+          headers: {
+            'Authorization': 'Bearer $accessToken',
+          },
+        ),
+      );
+      
+      print('📥 User Data Response Status: ${response.statusCode}');
+      print('📥 User Data Response: ${response.data}');
+      
+      if (response.data != null) {
+        print('✅ User Data received successfully');
+        print('👤 User Information:');
+        final userData = response.data as Map<String, dynamic>;
+        print('   - Name: ${userData['first_name'] ?? ''} ${userData['last_name'] ?? ''}');
+        print('   - PINFL: ${userData['pinfl'] ?? ''}');
+        print('   - Phone: ${userData['phone_number'] ?? ''}');
+        print('   - Passport: ${userData['passport_series'] ?? ''}${userData['passport_number'] ?? ''}');
+        print('   - Birth Date: ${userData['birth_date'] ?? ''}');
+        return userData;
+      }
+      
+      throw Exception('User data not found in response');
+    } catch (e) {
+      print('❌ Get User Data Error: $e');
+      if (e is DioException && e.response != null) {
+        print('❌ Error Response Status: ${e.response?.statusCode}');
+        print('❌ Error Response Data: ${e.response?.data}');
+      }
+      throw Exception('Failed to get user data: ${e.toString()}');
+    }
+  }
+
+ 
+  static Future<MyIdResult> startAuthentication({
+    required String sessionId,
+    required String clientHash,
+    required String clientHashId,
+    String environment = 'debug',
+    String entryType = 'identification',
+    int minAge = 16,
+    String residency = 'resident',
+    String locale = 'uzbek',
+    String cameraShape = 'circle',
+    bool showErrorScreen = true,
+  }) async {
+    try {
+      final platform = defaultTargetPlatform == TargetPlatform.iOS ? 'iOS' : 'Android';
+      print('🔵 MyID SDK - Starting Authentication on $platform');
+      print('📤 Sending to $platform:');
+      print('   - sessionId: $sessionId');
+      print('   - clientHashId: $clientHashId');
+      print('   - clientHash: ${clientHash.substring(0, 50)}...');
+      print('   - environment: $environment');
+      print('   - entryType: $entryType');
+      print('   - locale: $locale');
+      
+      final result = await _channel.invokeMethod<Map<dynamic, dynamic>>(
+        'startMyId',
+        {
+          'sessionId': sessionId,
+          'clientHash': clientHash,
+          'clientHashId': clientHashId,
+          'environment': environment,
+          'entryType': entryType,
+          'minAge': minAge,
+          'residency': residency,
+          'locale': locale,
+          'cameraShape': cameraShape,
+          'showErrorScreen': showErrorScreen,
+        },
+      );
+
+      print('📥 MyID SDK Response: $result');
+
+      if (result == null) {
+        print('❌ MyID SDK - No result returned');
+        throw MyIdException(
+          code: 'UNKNOWN_ERROR',
+          message: 'No result returned from MyID',
         );
       }
-      return;
+
+      if (result['success'] == true) {
+        print('✅ MyID SDK - Success');
+        print('   - code: ${result['code']}');
+        print('   - image: ${result['image'] != null ? "present" : "null"}');
+        return MyIdResult(
+          code: result['code'] as String?,
+          image: result['image'] as String?,
+          comparisonValue: result['comparisonValue'] as double?,
+        );
+      } else {
+        print('❌ MyID SDK - Error');
+        print('   - code: ${result['code']}');
+        print('   - message: ${result['message']}');
+        throw MyIdException(
+          code: result['code'] as String? ?? 'UNKNOWN_ERROR',
+          message: result['message'] as String? ?? 'Unknown error occurred',
+        );
+      }
+    } on PlatformException catch (e) {
+      print('❌ MyID SDK - Platform Exception');
+      print('   - code: ${e.code}');
+      print('   - message: ${e.message}');
+      print('   - details: ${e.details}');
+      throw MyIdException(
+        code: e.code,
+        message: e.message ?? 'Platform error occurred',
+      );
+    } catch (e) {
+      print('❌ MyID SDK - General Exception: $e');
+      throw MyIdException(
+        code: 'UNKNOWN_ERROR',
+        message: e.toString(),
+      );
     }
-
-    throw MissingPluginException(
-      'MyIdService: unhandled callback ${call.method}',
-    );
   }
 
-  MyIdFlowStatus _parseStatus(dynamic value) {
-    switch (value?.toString().toLowerCase()) {
-      case 'success':
-        return MyIdFlowStatus.success;
-      case 'error':
-        return MyIdFlowStatus.error;
-      case 'cancelled':
-        return MyIdFlowStatus.cancelled;
-      default:
-        return MyIdFlowStatus.unknown;
+  /// Verify MyID with backend API
+  /// GET /accounts/myid/verify/
+  static Future<Map<String, dynamic>?> verifyMyIdWithBackend({
+    required String code,
+    required String token,
+    String? phoneNumber,
+  }) async {
+    try {
+      print('🔵 MyID Backend Verify API Request: /accounts/myid/verify/');
+      print('📤 Code: $code');
+      print('📤 Token: ${token.substring(0, 20)}...');
+      print('📤 Phone: $phoneNumber');
+      
+      // Import ApiService for backend calls
+      final dio = Dio();
+      
+      final response = await dio.get(
+        'http://192.81.218.80:6060/api/v1/accounts/myid/verify/',
+        queryParameters: {
+          'code': code,
+          'token': token,
+          if (phoneNumber != null) 'phone_number': phoneNumber,
+        },
+        options: Options(
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        ),
+      );
+
+      final data = response.data;
+      print('🔵 MyID Backend Verify Response Status: ${response.statusCode}');
+      print('🔵 MyID Backend Verify Response Data: $data');
+
+      if (response.statusCode == 200) {
+        return {
+          'success': true,
+          'data': data,
+        };
+      } else {
+        return {
+          'success': false,
+          'error': 'Unexpected status code: ${response.statusCode}',
+        };
+      }
+    } catch (e) {
+      print('❌ Error in MyID backend verify: $e');
+      
+      String errorMessage = 'Ошибка при верификации MyID';
+      
+      if (e is DioException) {
+        if (e.response?.data != null) {
+          final errorData = e.response!.data;
+          if (errorData is Map && errorData.containsKey('error')) {
+            errorMessage = errorData['error'].toString();
+          } else if (errorData is Map && errorData.containsKey('message')) {
+            errorMessage = errorData['message'].toString();
+          }
+        }
+      }
+      
+      return {
+        'success': false,
+        'error': errorMessage,
+      };
     }
   }
-
-  void dispose() {
-    _eventController.close();
-  }
 }
 
-class MyIdConfig {
-  MyIdConfig({
-    required this.sessionId,
-    required this.clientHash,
-    required this.clientHashId,
-    this.minAge,
-    this.environment = MyIdEnvironment.production,
-    this.entryType = MyIdEntryType.identification,
-    this.residency = MyIdResidency.resident,
-    this.locale = MyIdLocale.uz,
-    this.cameraShape = MyIdCameraShape.circle,
-    this.showErrorScreen = true,
-    this.organizationDetails,
-    this.appearance,
-  });
-
-  final String sessionId;
-  final String clientHash;
-  final String clientHashId;
-  final int? minAge;
-  final MyIdEnvironment environment;
-  final MyIdEntryType entryType;
-  final MyIdResidency residency;
-  final MyIdLocale locale;
-  final MyIdCameraShape cameraShape;
-  final bool showErrorScreen;
-  final MyIdOrganizationDetails? organizationDetails;
-  final MyIdAppearance? appearance;
-
-  Map<String, dynamic> toJson() {
-    return {
-      'sessionId': sessionId,
-      'clientHash': clientHash,
-      'clientHashId': clientHashId,
-      if (minAge != null) 'minAge': minAge,
-      'environment': environment.name,
-      'entryType': entryType.name,
-      'residency': residency.name,
-      'locale': locale.code,
-      'cameraShape': cameraShape.name,
-      'showErrorScreen': showErrorScreen,
-      if (organizationDetails != null)
-        'organizationDetails': organizationDetails!.toJson(),
-      if (appearance != null) 'appearance': appearance!.toJson(),
-    };
-  }
-}
-
-class MyIdAppearance {
-  MyIdAppearance({
-    this.colorPrimary,
-    this.colorOnPrimary,
-    this.colorError,
-    this.colorOnError,
-    this.colorOutline,
-    this.colorDivider,
-    this.colorSuccess,
-    this.colorButtonContainer,
-    this.colorButtonContainerDisabled,
-    this.colorButtonContent,
-    this.colorButtonContentDisabled,
-    this.buttonCornerRadius,
-  });
-
-  final String? colorPrimary;
-  final String? colorOnPrimary;
-  final String? colorError;
-  final String? colorOnError;
-  final String? colorOutline;
-  final String? colorDivider;
-  final String? colorSuccess;
-  final String? colorButtonContainer;
-  final String? colorButtonContainerDisabled;
-  final String? colorButtonContent;
-  final String? colorButtonContentDisabled;
-  final double? buttonCornerRadius;
-
-  Map<String, dynamic> toJson() {
-    return {
-      if (colorPrimary != null) 'colorPrimary': colorPrimary,
-      if (colorOnPrimary != null) 'colorOnPrimary': colorOnPrimary,
-      if (colorError != null) 'colorError': colorError,
-      if (colorOnError != null) 'colorOnError': colorOnError,
-      if (colorOutline != null) 'colorOutline': colorOutline,
-      if (colorDivider != null) 'colorDivider': colorDivider,
-      if (colorSuccess != null) 'colorSuccess': colorSuccess,
-      if (colorButtonContainer != null)
-        'colorButtonContainer': colorButtonContainer,
-      if (colorButtonContainerDisabled != null)
-        'colorButtonContainerDisabled': colorButtonContainerDisabled,
-      if (colorButtonContent != null) 'colorButtonContent': colorButtonContent,
-      if (colorButtonContentDisabled != null)
-        'colorButtonContentDisabled': colorButtonContentDisabled,
-      if (buttonCornerRadius != null) 'buttonCornerRadius': buttonCornerRadius,
-    };
-  }
-}
-
-class MyIdOrganizationDetails {
-  MyIdOrganizationDetails({this.phoneNumber, this.logoAsset, this.logoBase64});
-
-  final String? phoneNumber;
-  final String? logoAsset;
-  final String? logoBase64;
-
-  Map<String, dynamic> toJson() {
-    return {
-      if (phoneNumber != null) 'phoneNumber': phoneNumber,
-      if (logoAsset != null) 'logoAsset': logoAsset,
-      if (logoBase64 != null) 'logoBase64': logoBase64,
-    };
-  }
-}
-
-class MyIdFlowResult {
-  MyIdFlowResult({
-    required this.status,
-    this.code,
-    this.reuid,
-    this.comparisonValue,
-    this.imageBase64,
-    this.errorCode,
-    this.errorMessage,
-    this.raw,
-  });
-
-  final MyIdFlowStatus status;
+class MyIdResult {
   final String? code;
-  final String? reuid;
-  final dynamic comparisonValue;
-  final String? imageBase64;
-  final String? errorCode;
-  final String? errorMessage;
-  final Map<String, dynamic>? raw;
+  final String? image; // Base64 encoded image
+  final double? comparisonValue;
 
-  bool get isSuccess => status == MyIdFlowStatus.success;
-  bool get isCancelled => status == MyIdFlowStatus.cancelled;
-  bool get isError => status == MyIdFlowStatus.error;
+  MyIdResult({
+    this.code,
+    this.image,
+    this.comparisonValue,
+  });
 }
 
-class MyIdSdkEvent {
-  MyIdSdkEvent({required this.name, required this.payload});
+class MyIdException implements Exception {
+  final String code;
+  final String message;
 
-  final String name;
-  final Map<String, dynamic> payload;
+  MyIdException({
+    required this.code,
+    required this.message,
+  });
+
+  @override
+  String toString() => 'MyIdException(code: $code, message: $message)';
 }
 
-enum MyIdFlowStatus { success, error, cancelled, unknown }
-
-enum MyIdEnvironment { production, debug }
-
-extension _MyIdEnvironmentName on MyIdEnvironment {
-  String get name => switch (this) {
-    MyIdEnvironment.production => 'production',
-    MyIdEnvironment.debug => 'debug',
-  };
-}
-
-enum MyIdEntryType { identification, faceDetection }
-
-extension _MyIdEntryTypeName on MyIdEntryType {
-  String get name => switch (this) {
-    MyIdEntryType.identification => 'identification',
-    MyIdEntryType.faceDetection => 'faceDetection',
-  };
-}
-
-enum MyIdResidency { resident, nonResident, userDefined }
-
-extension _MyIdResidencyName on MyIdResidency {
-  String get name => switch (this) {
-    MyIdResidency.resident => 'resident',
-    MyIdResidency.nonResident => 'nonResident',
-    MyIdResidency.userDefined => 'userDefined',
-  };
-}
-
-enum MyIdLocale { uz, en, ru }
-
-extension _MyIdLocaleCode on MyIdLocale {
-  String get code => switch (this) {
-    MyIdLocale.uz => 'uz',
-    MyIdLocale.en => 'en',
-    MyIdLocale.ru => 'ru',
-  };
-}
-
-enum MyIdCameraShape { circle, ellipse }
-
-extension _MyIdCameraShapeName on MyIdCameraShape {
-  String get name => switch (this) {
-    MyIdCameraShape.circle => 'circle',
-    MyIdCameraShape.ellipse => 'ellipse',
-  };
-}

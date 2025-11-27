@@ -52,6 +52,14 @@ class CartService {
 
     if (existingIndex != -1) {
       // Update quantity if exists
+      final existingItem = items[existingIndex];
+      final isUsed = product['isUsed'] == true || existingItem['isUsed'] == true;
+      
+      if (isUsed && (existingItem['quantity'] as int) >= 1) {
+        // Ishlatilgan mahsulot uchun quantity oshirmaslik
+        return;
+      }
+      
       items[existingIndex]['quantity'] = (items[existingIndex]['quantity'] as int) + 1;
     } else {
       // Add new item with unique ID
@@ -65,6 +73,7 @@ class CartService {
         'selectedSim': selectedSim,
         'uniqueId': product['uniqueId'] ?? generateId(),
         'quantity': product['quantity'] ?? 1,
+        'isUsed': product['isUsed'] ?? false, // isUsed flagini saqlash
       };
       items.add(newItem);
     }

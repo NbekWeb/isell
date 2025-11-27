@@ -5,9 +5,14 @@ import 'package:google_fonts/google_fonts.dart';
 import 'screens/splash_screen.dart';
 import 'components/main_layout.dart';
 import 'services/theme_service.dart';
+import 'services/api_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  
+  // Initialize API Service with interceptors
+  ApiService.init();
+  print('✅ ApiService initialized with interceptors');
   
   // Initialize Yandex MapKit with API key
   // API key is configured in AndroidManifest.xml and Info.plist
@@ -107,7 +112,10 @@ class _ISellAppState extends State<ISellApp> {
             primarySwatch: Colors.blue,
             useMaterial3: true,
             fontFamily: GoogleFonts.poppins().fontFamily,
-            textTheme: GoogleFonts.poppinsTextTheme(),
+            textTheme: GoogleFonts.poppinsTextTheme().apply(
+              bodyColor: Colors.white,
+              displayColor: Colors.white,
+            ),
             scaffoldBackgroundColor: const Color(0xFF1A1A1A),
             brightness: Brightness.dark,
             appBarTheme: const AppBarTheme(

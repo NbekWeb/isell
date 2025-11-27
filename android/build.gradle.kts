@@ -6,6 +6,10 @@ allprojects {
         maven {
             url = uri("https://maven.yandex.ru/repository/yandex-maps-public")
         }
+        // MyID SDK repository
+        maven {
+            url = uri("https://artifactory.aigroup.uz:443/artifactory/myid")
+        }
     }
 }
 

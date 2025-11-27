@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../constants/navigator_key.dart';
 
@@ -34,14 +35,31 @@ class ApiService {
       InterceptorsWrapper(
         onRequest: (options, handler) async {
           try {
-            var token = await _storage.read(key: 'access_token');
+            String? token;
+            
+            // Try to get token from SharedPreferences first
+            try {
+              final prefs = await SharedPreferences.getInstance();
+              token = prefs.getString('accessToken');
+              print('🔍 API Service - Token from SharedPreferences: ${token != null ? "Found" : "Not found"}');
+            } catch (e) {
+              print('❌ Error reading token from SharedPreferences: $e');
+            }
+            
+            // Fallback to secure storage if not found in SharedPreferences
+            if (token == null) {
+              token = await _storage.read(key: 'access_token');
+              print('🔍 API Service - Token from SecureStorage: ${token != null ? "Found" : "Not found"}');
+            }
 
+            // Use memory token as last resort
             if (token == null &&
                 _memoryToken != null &&
                 !(options.extra['open'] == true)) {
               try {
                 await _storage.write(key: 'access_token', value: _memoryToken);
                 token = _memoryToken;
+                print('🔍 API Service - Using memory token');
               } catch (e) {
                 if (e.toString().contains('already exists')) {
                   try {
@@ -62,8 +80,13 @@ class ApiService {
 
             if (token != null && !(options.extra['open'] == true)) {
               options.headers['Authorization'] = 'Bearer $token';
+              print('✅ API Service - Authorization header set: Bearer ${token.substring(0, 20)}...');
+            } else {
+              print('❌ API Service - No token available for authorization');
             }
-          } catch (_) {}
+          } catch (e) {
+            print('❌ API Service - Error in request interceptor: $e');
+          }
 
           return handler.next(options);
         },
@@ -72,9 +95,22 @@ class ApiService {
         },
         onError: (DioException e, handler) async {
           if (e.response?.statusCode == 401) {
+            print('❌ API Service - 401 Unauthorized, clearing tokens');
+            
+            // Clear tokens from both storage locations
+            try {
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.remove('accessToken');
+              await prefs.remove('refreshToken');
+            } catch (e) {
+              print('❌ Error clearing SharedPreferences tokens: $e');
+            }
+            
             try {
               await _storage.delete(key: 'access_token');
-            } catch (_) {}
+            } catch (e) {
+              print('❌ Error clearing SecureStorage token: $e');
+            }
 
             if (navigatorKey.currentState != null) {
               navigatorKey.currentState!.pushNamedAndRemoveUntil(
@@ -120,7 +156,20 @@ class ApiService {
     Map<String, dynamic>? queryParameters,
     Map<String, dynamic>? headers,
   }) async {
-    final token = await _storage.read(key: 'access_token');
+    String? token;
+    
+    // Try SharedPreferences first
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      token = prefs.getString('accessToken');
+    } catch (e) {
+      print('❌ Error reading token for upload: $e');
+    }
+    
+    // Fallback to secure storage
+    if (token == null) {
+      token = await _storage.read(key: 'access_token');
+    }
 
     final options = Options(
       method: method,

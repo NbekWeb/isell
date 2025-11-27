@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- MyID SDK Custom Colors -->
+    
+    <!-- Primary colors -->
+    <color name="myid_color_primary">#007AFF</color>
+    <color name="myid_color_onPrimary">#FFFFFF</color>
+    
+    <!-- Error colors -->
+    <color name="myid_color_error">#FF3B30</color>
+    <color name="myid_color_onError">#FFFFFF</color>
+    
+    <!-- UI element colors -->
+    <color name="myid_color_divider">#E5E5EA</color>
+    <color name="myid_color_outline">#C7C7CC</color>
+    <color name="myid_color_success">#34C759</color>
+    
+    <!-- Progress indicator colors -->
+    <color name="myid_color_progress_indicator_active">#007AFF</color>
+    <color name="myid_color_progress_indicator_inactive">#E5E5EA</color>
+    
+    <!-- Button colors -->
+    <color name="myid_button_container_color">#007AFF</color>
+    <color name="myid_button_container_disabled_color">#C7C7CC</color>
+    <color name="myid_button_content_color">#FFFFFF</color>
+    <color name="myid_button_content_disabled_color">#8E8E93</color>
+</resources>

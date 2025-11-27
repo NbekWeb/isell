@@ -9,28 +9,31 @@ import '../pages/dashboard/settings_page.dart';
 
 class MainLayout extends StatefulWidget {
   final Function(ThemeMode)? onThemeUpdate;
+  final int? initialIndex;
   
-  const MainLayout({super.key, this.onThemeUpdate});
+  const MainLayout({super.key, this.onThemeUpdate, this.initialIndex});
 
   @override
   State<MainLayout> createState() => _MainLayoutState();
 }
 
 class _MainLayoutState extends State<MainLayout> {
-  int _currentIndex = 0;
+  late int _currentIndex;
+  final _cartPageKey = GlobalKey();
+  
+  @override
+  void initState() {
+    super.initState();
+    _currentIndex = widget.initialIndex ?? 0;
+  }
 
   List<Widget> get _pages => [
     const HomePage(),
     const CatalogPage(), // Catalog page
-    const CartPage(), // Cart page
+    CartPage(key: _cartPageKey), // Cart page with key for refresh
     const AgreementsPage(), // Agreements page
     SettingsPage(onThemeUpdate: widget.onThemeUpdate), // Settings page
   ];
-
-  @override
-  void initState() {
-    super.initState();
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -62,6 +65,10 @@ class _MainLayoutState extends State<MainLayout> {
                     setState(() {
                       _currentIndex = index;
                     });
+                    // Refresh cart page when switching to it
+                    if (index == 2) {
+                      CartPage.refresh(context);
+                    }
                   },
                 ),
               ),

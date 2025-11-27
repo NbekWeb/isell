@@ -33,10 +33,7 @@ mixin ProductCardHelpers {
 class ProductCard extends StatefulWidget {
   final Map<String, dynamic> product;
 
-  const ProductCard({
-    super.key,
-    required this.product,
-  });
+  const ProductCard({super.key, required this.product});
 
   @override
   State<ProductCard> createState() => _ProductCardState();
@@ -56,17 +53,14 @@ class _ProductCardState extends State<ProductCard> with ProductCardHelpers {
     final items = await CartService.getCartItems();
     final productId = _productId;
 
-    final existingItem = items.firstWhere(
-      (item) {
-        final itemId = item['id']?.toString();
-        if (productId != null && itemId != null) {
-          return itemId == productId;
-        }
-        return item['name'] == widget.product['name'] &&
-            item['price'] == widget.product['price'];
-      },
-      orElse: () => {},
-    );
+    final existingItem = items.firstWhere((item) {
+      final itemId = item['id']?.toString();
+      if (productId != null && itemId != null) {
+        return itemId == productId;
+      }
+      return item['name'] == _getProductName(widget.product) &&
+          item['price'] == _getProductPrice(widget.product);
+    }, orElse: () => {});
 
     if (existingItem.isNotEmpty) {
       setState(() {
@@ -81,8 +75,27 @@ class _ProductCardState extends State<ProductCard> with ProductCardHelpers {
     }
   }
 
+  bool _isUsedProduct(Map<String, dynamic> product) {
+    // API dan kelayotgan 'used' fieldini tekshirish
+    // used: 1 = ishlatilgan (б/у)
+    // used: 2 = yangi
+    final used = product['used'];
+    if (used != null) {
+      return used == 1;
+    }
+    
+    // Agar 'used' fieldi yo'q bo'lsa, product nomidan tekshirish (fallback)
+    final productName = _getProductName(product).toLowerCase();
+    final hasUsedPattern = productName.contains('b/u') || 
+                          productName.contains('б/у') ||
+                          productName.contains('б.у') ||
+                          productName.contains('b.u');
+    return hasUsedPattern;
+  }
+
   Future<void> _openProductDetails() async {
-    final productId = widget.product['id']?.toString() ??
+    final productId =
+        widget.product['id']?.toString() ??
         widget.product['product_id']?.toString();
     if (productId != null) {
       final prefs = await SharedPreferences.getInstance();
@@ -93,9 +106,7 @@ class _ProductCardState extends State<ProductCard> with ProductCardHelpers {
       await Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (context) => ProductDetailPage(
-            product: widget.product,
-          ),
+          builder: (context) => ProductDetailPage(product: widget.product),
         ),
       );
 
@@ -107,6 +118,14 @@ class _ProductCardState extends State<ProductCard> with ProductCardHelpers {
     if (_uniqueId == null) return;
 
     final newQuantity = _quantity + delta;
+    final isUsed = _isUsedProduct(widget.product);
+
+    // Ishlatilgan mahsulotlar uchun miqdorni 1 ga cheklash
+    if (isUsed && newQuantity > 1) {
+      // Toast ko'rsatish (agar kerak bo'lsa)
+      return;
+    }
+
     if (newQuantity <= 0) {
       await CartService.removeFromCart(_uniqueId!);
       if (mounted) {
@@ -127,12 +146,14 @@ class _ProductCardState extends State<ProductCard> with ProductCardHelpers {
     final cardColor = isDark ? const Color(0xFF2A2A2A) : Colors.white;
     final textColor = isDark ? Colors.white : Colors.black87;
     final borderColor = isDark ? Colors.white : Colors.black87;
-    final fallbackBgColor = isDark ? const Color(0xFF222222) : const Color.fromRGBO(255, 255, 255, 1);
+    final fallbackBgColor = isDark
+        ? const Color(0xFF222222)
+        : const Color.fromRGBO(255, 255, 255, 1);
     final fallbackTextColor = isDark ? Colors.white : Colors.black87;
     final imageUrl = _firstImageUrl(widget.product);
-    final priceText = _formatPrice(widget.product['price']);
-    final monthlyText = _formatMonthly(widget.product['monthly']);
-    
+    final priceText = _formatPrice(_getProductPrice(widget.product));
+    final monthlyText = _formatMonthly(_getProductMonthly(widget.product));
+
     return GestureDetector(
       onTap: _openProductDetails,
       child: Container(
@@ -141,186 +162,214 @@ class _ProductCardState extends State<ProductCard> with ProductCardHelpers {
           borderRadius: BorderRadius.circular(20),
         ),
         child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Product Image
-          SizedBox(
-            height: 180,
-            child: ClipRRect(
-              borderRadius: BorderRadius.only(
-                topLeft: Radius.circular(20),
-                topRight: Radius.circular(20),
-              ),
-              child: imageUrl != null
-                  ? Image.network(
-                      imageUrl,
-                      fit: BoxFit.cover,
-                      width: double.infinity,
-                      height: double.infinity,
-                      errorBuilder: (_, __, ___) => ProductCardHelpers.fallbackImage(
-                        widget.product['name']?.toString(),
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Product Image
+            SizedBox(
+              height: 180,
+              child: ClipRRect(
+                borderRadius: BorderRadius.only(
+                  topLeft: Radius.circular(20),
+                  topRight: Radius.circular(20),
+                ),
+                child: imageUrl != null
+                    ? Image.network(
+                        imageUrl,
+                        fit: BoxFit.cover,
+                        width: double.infinity,
+                        height: double.infinity,
+                        errorBuilder: (_, __, ___) =>
+                            ProductCardHelpers.fallbackImage(
+                              _getProductName(widget.product),
+                              fallbackBgColor,
+                              fallbackTextColor,
+                            ),
+                      )
+                    : ProductCardHelpers.fallbackImage(
+                        _getProductName(widget.product),
                         fallbackBgColor,
                         fallbackTextColor,
                       ),
-                    )
-                  : ProductCardHelpers.fallbackImage(
-                      widget.product['name']?.toString(),
-                      fallbackBgColor,
-                      fallbackTextColor,
-                    ),
+              ),
             ),
-          ),
 
-          // Product Info
-          Padding(
-            padding: EdgeInsets.symmetric(horizontal: 12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Product Name - fixed height for 2 lines
-                SizedBox(height: 10),
-                SizedBox(
-                  height: 40, // Approximate height for 2 lines of text
-                  child: Text(
-                    widget.product['name'],
+            // Product Info
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Product Name - flexible height for 2 lines
+                  SizedBox(height: 10),
+                  Container(
+                    constraints: BoxConstraints(
+                      minHeight: 40,
+                      maxHeight: 48, // Ko'proq joy berish
+                    ),
+                    child: Text(
+                      _getProductName(widget.product),
+                      style: TextStyle(
+                        fontSize: 14, // Biroz kichikroq qilish
+                        fontWeight: FontWeight.w600,
+                        color: textColor,
+                        height: 1.2, // Qator orasidagi masofani kamaytirish
+                      ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  SizedBox(height: 8),
+
+                  // Price
+                  Text(
+                    priceText,
                     style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
                       color: textColor,
                     ),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
                   ),
-                ),
-                SizedBox(height: 8),
+                  SizedBox(height: 4),
 
-                // Price
-                Text(
-                  priceText,
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: textColor,
-                  ),
-                ),
-                SizedBox(height: 4),
-
-                // Monthly Payment
-                if (monthlyText != null)
-                  Text(
-                    'от $monthlyText в мес',
-                    style: const TextStyle(
-                      fontSize: 12,
-                      color: Color(0xFF16A34A),
-                      fontWeight: FontWeight.w500,
+                  // Monthly Payment
+                  if (monthlyText != null)
+                    Text(
+                      'от $monthlyText в мес',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF16A34A),
+                        fontWeight: FontWeight.w500,
+                      ),
                     ),
-                  ),
-                SizedBox(height: 15),
+                  SizedBox(height: 15),
 
-                // Buttons Row
-                _quantity > 0
-                    ? Container(
-                        width: double.infinity,
-                        height: 40,
-                        decoration: BoxDecoration(
-                          color: Colors.transparent,
-                          border: Border.all(color: borderColor, width: 1),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Row(
-                          children: [
-                            IconButton(
-                              onPressed: () => _updateQuantity(-1),
-                              icon: Icon(
-                                Icons.remove,
-                                color: textColor,
-                                size: 16,
-                              ),
-                              padding: EdgeInsets.zero,
-                              constraints: BoxConstraints(),
-                            ),
-                            Expanded(
-                              child: Text(
-                                '$_quantity',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
+                  // Buttons Row
+                  _quantity > 0
+                      ? Container(
+                          width: double.infinity,
+                          height: 40,
+                          decoration: BoxDecoration(
+                            color: Colors.transparent,
+                            border: Border.all(color: borderColor, width: 1),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Row(
+                            children: [
+                              IconButton(
+                                onPressed: () => _updateQuantity(-1),
+                                icon: Icon(
+                                  Icons.remove,
                                   color: textColor,
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w600,
+                                  size: 16,
+                                ),
+                                padding: EdgeInsets.zero,
+                                constraints: BoxConstraints(),
+                              ),
+                              Expanded(
+                                child: Text(
+                                  '$_quantity',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    color: textColor,
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                              IconButton(
+                                onPressed: _isUsedProduct(widget.product) && _quantity >= 1
+                                    ? null // Ishlatilgan mahsulot uchun o'chirish
+                                    : () => _updateQuantity(1),
+                                icon: Icon(
+                                  Icons.add,
+                                  color: _isUsedProduct(widget.product) && _quantity >= 1
+                                      ? textColor.withOpacity(0.3)
+                                      : textColor,
+                                  size: 16,
+                                ),
+                                padding: EdgeInsets.zero,
+                                constraints: BoxConstraints(),
+                              ),
+                            ],
+                          ),
+                        )
+                      : Row(
+                          children: [
+                            // Details Button
+                            Expanded(
+                              child: SizedBox(
+                                height: 40,
+                                child: OutlinedButton(
+                                  onPressed: _openProductDetails,
+                                  style: OutlinedButton.styleFrom(
+                                    side: BorderSide(
+                                      color: borderColor,
+                                      width: 1,
+                                    ),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    padding: EdgeInsets.zero,
+                                  ),
+                                  child: Text(
+                                    'Подробнее',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: textColor,
+                                    ),
+                                  ),
                                 ),
                               ),
                             ),
-                            IconButton(
-                              onPressed: () => _updateQuantity(1),
-                              icon: Icon(
-                                Icons.add,
-                                color: textColor,
-                                size: 16,
+                            SizedBox(width: 10),
+
+                            // Add to Cart Button
+                            Container(
+                              width: 40,
+                              height: 40,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF2196F3),
+                                borderRadius: BorderRadius.circular(12),
                               ),
-                              padding: EdgeInsets.zero,
-                              constraints: BoxConstraints(),
+                              child: IconButton(
+                                onPressed: _openProductDetails,
+                                icon: Icon(
+                                  Icons.shopping_cart,
+                                  color: Colors.white,
+                                  size: 20,
+                                ),
+                                padding: EdgeInsets.zero,
+                              ),
                             ),
                           ],
                         ),
-                      )
-                    : Row(
-                        children: [
-                          // Details Button
-                          Expanded(
-                            child: SizedBox(
-                              height: 40,
-                              child: OutlinedButton(
-                                onPressed: _openProductDetails,
-                                style: OutlinedButton.styleFrom(
-                                  side: BorderSide(color: borderColor, width: 1),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  padding: EdgeInsets.zero,
-                                ),
-                                child: Text(
-                                  'Подробнее',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: textColor,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-                          SizedBox(width: 10),
-
-                          // Add to Cart Button
-                          Container(
-                            width: 40,
-                            height: 40,
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF2196F3),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: IconButton(
-                              onPressed: _openProductDetails,
-                              icon: Icon(
-                                Icons.shopping_cart,
-                                color: Colors.white,
-                                size: 20,
-                              ),
-                              padding: EdgeInsets.zero,
-                            ),
-                          ),
-                        ],
-                      ),
-                SizedBox(height: 10),
-              ],
+                  SizedBox(height: 10),
+                ],
+              ),
             ),
-          ),
-        ],
-      ),
+          ],
+        ),
       ),
     );
   }
 
   String? _firstImageUrl(Map<String, dynamic> product) {
+    // Check direct image field first
+    if (product['image'] is String && product['image'].isNotEmpty) {
+      return product['image'] as String;
+    }
+
+    // Check variations for images
+    final variations = product['variations'];
+    if (variations is List && variations.isNotEmpty) {
+      for (final variation in variations) {
+        if (variation['image'] is String && variation['image'].isNotEmpty) {
+          return variation['image'] as String;
+        }
+      }
+    }
+
+    // Fallback to old structure
     final images = product['images'];
     if (images is List && images.isNotEmpty) {
       final first = images.first;
@@ -334,10 +383,10 @@ class _ProductCardState extends State<ProductCard> with ProductCardHelpers {
   }
 
   String? get _productId {
-    final id = widget.product['id'] ?? widget.product['product_id'];
+    final id = widget.product['product_id'];
     return id?.toString();
   }
- 
+
   double? _parseUsdValue(dynamic value) {
     if (value == null) return null;
 
@@ -357,8 +406,9 @@ class _ProductCardState extends State<ProductCard> with ProductCardHelpers {
 
   String _formatUsd(num amount) {
     final isWhole = amount == amount.roundToDouble();
-    final formatted =
-        isWhole ? amount.round().toString() : amount.toStringAsFixed(2);
+    final formatted = isWhole
+        ? amount.round().toString()
+        : amount.toStringAsFixed(2);
     final parts = formatted.split('.');
     final integerPart = parts[0];
     final decimalPart = parts.length > 1 ? parts[1] : null;
@@ -385,5 +435,41 @@ class _ProductCardState extends State<ProductCard> with ProductCardHelpers {
     if (amount == null) return null;
     return _formatUsd(amount);
   }
-}
 
+  String _getProductName(Map<String, dynamic> product) {
+    return product['product_name']?.toString() ??
+        product['name']?.toString() ??
+        'Без названия';
+  }
+
+  dynamic _getProductPrice(Map<String, dynamic> product) {
+    // First check if there's a direct price field (for backward compatibility)
+    if (product['price'] != null) {
+      return product['price'];
+    }
+
+    // Check variations for price
+    final variations = product['variations'];
+    if (variations is List && variations.isNotEmpty) {
+      // Find the default variation first
+      final defaultVariation = variations.firstWhere(
+        (v) => v['is_default'] == true,
+        orElse: () => variations.first,
+      );
+      return defaultVariation['price'];
+    }
+
+    return 0;
+  }
+
+  dynamic _getProductMonthly(Map<String, dynamic> product) {
+    // Check if there's a direct monthly field (for backward compatibility)
+    if (product['monthly'] != null) {
+      return product['monthly'];
+    }
+
+    // For new structure, we might not have monthly payments info
+    // You can calculate it based on price or return null
+    return null;
+  }
+}

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -6,8 +7,10 @@ import 'package:carousel_slider/carousel_slider.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import '../components/product_card.dart';
 import '../components/product_detail_sections.dart';
-import 'phone_input_page.dart';
 import '../services/product_services.dart';
+import '../services/cart_service.dart';
+import '../widgets/custom_toast.dart';
+import '../components/main_layout.dart';
 
 class ProductDetailPage extends StatefulWidget {
   final Map<String, dynamic> product;
@@ -33,29 +36,45 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
   List<Map<String, dynamic>> _colorOptions = [];
   List<Map<String, dynamic>> _storageOptions = [];
   List<Map<String, dynamic>> _simOptions = [];
-  final List<String> periods = ['6 месяц', '12 месяц', '18 месяц', '24 месяц'];
+  List<Map<String, dynamic>> _tariffs = [];
+  String? _selectedTariffId;
   final GlobalKey _selectKey = GlobalKey();
   int? _productId;
+  int _cartQuantity = 0;
+  String? _cartUniqueId;
+  Timer? _calculateDebounce;
+  String? _calculatedMonthlyText;
+  bool _isCalculating = false;
 
 
   @override
   void initState() {
     super.initState();
     _currentProduct = Map<String, dynamic>.from(widget.product);
-    _productId = _parseProductId(_currentProduct['id']);
+    _productId = _parseProductId(_currentProduct['product_id']);
+    
+    
     _hydrateOptions(fromApi: false);
     _loadProductIdAndFilter();
+    _fetchTariffs();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _syncCartState();
+    });
+  }
+
+  @override
+  void dispose() {
+    _calculateDebounce?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadProductIdAndFilter() async {
+    // Always use the product ID from the widget, not from SharedPreferences
+    _productId = _parseProductId(widget.product['product_id']);
+    
+    // Clear any stored product_id to prevent conflicts
     final prefs = await SharedPreferences.getInstance();
-    final productIdString = prefs.getString('selected_product_id');
-    final storedId = productIdString != null ? int.tryParse(productIdString) : null;
-    if (storedId != null) {
-      _productId = storedId;
-    }
-
-    _productId ??= _parseProductId(widget.product['id']);
+    await prefs.remove('selected_product_id');
 
     if (_productId != null) {
       await _fetchProductFilter(_productId!);
@@ -77,8 +96,24 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
 
       if (result != null && mounted) {
         setState(() {
-          _currentProduct = Map<String, dynamic>.from(result);
-          _hydrateOptions();
+          // Preserve the original product_id and verify API response consistency
+          final originalProductId = _currentProduct['product_id'];
+          final resultProductId = result['product_id'] ?? result['id'];
+          
+          
+          // Only update if the API returned data for the correct product
+          if (originalProductId != null && resultProductId != null && 
+              originalProductId.toString() == resultProductId.toString()) {
+            _currentProduct = Map<String, dynamic>.from(result);
+            _currentProduct['product_id'] = originalProductId;
+            _hydrateOptions();
+          } else {
+            // Still update options if they exist in the response
+            if (result['filter_options'] != null) {
+              _currentProduct['filter_options'] = result['filter_options'];
+              _hydrateOptions();
+            }
+          }
           _isLoadingFilter = false;
         });
       } else {
@@ -93,6 +128,185 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
         });
       }
     }
+
+    await _syncCartState();
+  }
+
+  Future<void> _fetchTariffs() async {
+    try {
+      final tariffs = await ProductServices.getTariffs();
+      if (mounted) {
+        setState(() {
+          _tariffs = tariffs;
+          // Set default tariff (try to find a simple one that works with backend)
+          if (_tariffs.isNotEmpty) {
+            Map<String, dynamic>? defaultTariff;
+            
+            // Try to find "No installment" first (most likely to work)
+            try {
+              defaultTariff = _tariffs.firstWhere(
+                (t) => t['name'] == 'No installment' || t['payments_count'] == 0,
+              );
+            } catch (e) {
+              // Not found, try simple monthly tariffs without offset days
+              try {
+                defaultTariff = _tariffs.firstWhere(
+                  (t) => t['payments_count'] == 1 && (t['offset_days'] == null || t['offset_days'] == 0),
+            );
+              } catch (e) {
+                // If still not found, use the last tariff (likely to be "No installment")
+                defaultTariff = _tariffs.last;
+              }
+            }
+            
+            _selectedTariffId = defaultTariff['id'].toString();
+            print('🔵 Selected default tariff: ${defaultTariff['name']} (ID: ${defaultTariff['id']})');
+          }
+        });
+        
+        // Trigger initial calculation
+        _calculateMonthlyPaymentWithDebounce();
+      }
+    } catch (e) {
+      print('❌ Error fetching tariffs: $e');
+    }
+  }
+
+  void _calculateMonthlyPaymentWithDebounce() {
+    _calculateDebounce?.cancel();
+    _calculateDebounce = Timer(const Duration(milliseconds: 500), () {
+      _calculateMonthlyPayment();
+    });
+  }
+
+  Future<void> _calculateMonthlyPayment() async {
+    final productId = _currentProductIdAsString();
+    if (productId == null || _selectedTariffId == null) {
+      return;
+    }
+
+    final tariffId = int.tryParse(_selectedTariffId!);
+    if (tariffId == null) {
+      return;
+    }
+
+    // Show loading state
+    if (mounted) {
+      setState(() {
+        _isCalculating = true;
+      });
+    }
+
+    try {
+      final variationId = _getCurrentVariationId();
+      
+      
+      final result = await ProductServices.calculateMonthlyPayment(
+        productId: productId,
+        advancePayment: downPayment,
+        tariffId: tariffId,
+        variationId: variationId,
+      );
+
+      if (result != null && mounted) {
+        setState(() {
+          // Handle new API response structure
+          dynamic monthlyPayment;
+          
+          if (result is List && result.isNotEmpty) {
+            final resultList = result as List;
+            final firstResult = resultList.first;
+            if (firstResult is Map<String, dynamic>) {
+              monthlyPayment = firstResult['monthly_payment'];
+            }
+          } else if (result is Map<String, dynamic>) {
+            final resultMap = result as Map<String, dynamic>;
+            monthlyPayment = resultMap['monthly_payment'];
+          }
+          
+          _calculatedMonthlyText = monthlyPayment?.toString();
+          _isCalculating = false;
+        });
+      }
+    } catch (e) {
+      print('❌ Error calculating monthly payment: $e');
+      if (mounted) {
+        setState(() {
+          _isCalculating = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _syncCartState() async {
+    final productId = _currentProductIdAsString();
+    if (productId == null) {
+      if (_cartQuantity != 0 || _cartUniqueId != null) {
+        if (!mounted) return;
+        setState(() {
+          _cartQuantity = 0;
+          _cartUniqueId = null;
+        });
+      }
+      return;
+    }
+
+    final items = await CartService.getCartItems();
+    Map<String, dynamic>? matchedItem;
+    final targetColor = selectedColor ?? '';
+    final targetStorage = selectedStorage ?? '';
+    final targetSim = selectedSimCard ?? '';
+
+    for (final rawItem in items) {
+      final item = Map<String, dynamic>.from(rawItem);
+      final itemId = item['id']?.toString();
+      if (itemId != productId) continue;
+
+      final itemColor = item['selectedColor']?.toString() ?? '';
+      final itemStorage = item['selectedStorage']?.toString() ?? '';
+      final itemSim = item['selectedSim']?.toString() ?? '';
+
+      if (itemColor == targetColor &&
+          itemStorage == targetStorage &&
+          itemSim == targetSim) {
+        matchedItem = item;
+        break;
+      }
+    }
+
+    final newQuantity = _extractQuantityFromItem(matchedItem);
+    final newUniqueId = matchedItem != null ? matchedItem['uniqueId']?.toString() : null;
+
+    if (!mounted) return;
+
+    if (_cartQuantity != newQuantity || _cartUniqueId != newUniqueId) {
+      setState(() {
+        _cartQuantity = newQuantity;
+        _cartUniqueId = newUniqueId;
+      });
+    }
+  }
+
+  int _extractQuantityFromItem(Map<String, dynamic>? item) {
+    if (item == null) return 0;
+    final quantity = item['quantity'];
+    if (quantity is int) return quantity;
+    if (quantity is num) return quantity.toInt();
+    if (quantity is String) return int.tryParse(quantity) ?? 0;
+    return 0;
+  }
+
+  String? _currentProductIdAsString() {
+    final idValue = _currentProduct['product_id'];
+    final originalId = widget.product['product_id'];
+    
+    // Always prefer the original product ID from the widget
+    if (originalId != null) {
+      return originalId.toString();
+    }
+    
+    if (idValue == null) return null;
+    return idValue.toString();
   }
 
   int? _parseProductId(dynamic value) {
@@ -125,9 +339,11 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
       selectedStorage = _getInitialSelection(_storageOptions, 'storage_name', fallback: selectedStorage);
       selectedSimCard = _getInitialSelection(_simOptions, 'sim_card_name', fallback: selectedSimCard);
     } else {
-      selectedColor = _getInitialSelection(_colorOptions, 'color_name');
-      selectedStorage = _getInitialSelection(_storageOptions, 'storage_name');
-      selectedSimCard = _getInitialSelection(_simOptions, 'sim_card_name');
+      // For initial load, use default variation parameters
+      final defaultParams = _getDefaultVariationParams();
+      selectedColor = defaultParams['color'] ?? _getInitialSelection(_colorOptions, 'color_name');
+      selectedStorage = defaultParams['storage'] ?? _getInitialSelection(_storageOptions, 'storage_name');
+      selectedSimCard = defaultParams['sim'] ?? _getInitialSelection(_simOptions, 'sim_card_name');
     }
 
     _markActiveOptions(_colorOptions, 'color_name', selectedColor);
@@ -138,6 +354,19 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
   }
 
   List<Map<String, dynamic>> _extractOptionList(Map<String, dynamic> product, String key) {
+    // First check the new structure under filter_options
+    final filterOptions = product['filter_options'];
+    if (filterOptions is Map<String, dynamic>) {
+      final raw = filterOptions[key];
+      if (raw is List) {
+        return raw
+            .whereType<Map>()
+            .map((option) => Map<String, dynamic>.from(option))
+            .toList();
+      }
+    }
+    
+    // Fallback to old structure (direct key)
     final raw = product[key];
     if (raw is List) {
       return raw
@@ -174,21 +403,47 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
     }
   }
 
+  Map<String, String?> _getDefaultVariationParams() {
+    final variations = _currentProduct['variations'];
+    if (variations is! List || variations.isEmpty) {
+      return {'color': null, 'storage': null, 'sim': null};
+    }
+
+    // Find default variation (is_default: true)
+    Map<String, dynamic>? defaultVariation;
+    for (final variation in variations) {
+      if (variation['is_default'] == true) {
+        defaultVariation = variation;
+        break;
+      }
+    }
+
+    // If no default variation found, use first one
+    defaultVariation ??= variations.first;
+
+    return {
+      'color': defaultVariation?['color']?.toString(),
+      'storage': defaultVariation?['storage']?.toString(),
+      'sim': defaultVariation?['sim']?.toString(),
+    };
+  }
+
   Future<void> _onColorChanged(String color) async {
     setState(() {
       selectedColor = color;
       _markActiveOptions(_colorOptions, 'color_name', selectedColor);
     });
 
-    if (_productId == null) {
-      final prefs = await SharedPreferences.getInstance();
-      final productIdString = prefs.getString('selected_product_id');
-      _productId = productIdString != null ? int.tryParse(productIdString) : null;
-    }
+    // Always use the original product ID from the widget
+    _productId = _parseProductId(widget.product['product_id']);
 
     if (_productId != null) {
       await _fetchProductFilter(_productId!);
+    } else {
+      await _syncCartState();
     }
+    
+    _calculateMonthlyPaymentWithDebounce();
   }
 
   Future<void> _onStorageChanged(String storage) async {
@@ -197,15 +452,16 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
       _markActiveOptions(_storageOptions, 'storage_name', selectedStorage);
     });
 
-    if (_productId == null) {
-      final prefs = await SharedPreferences.getInstance();
-      final productIdString = prefs.getString('selected_product_id');
-      _productId = productIdString != null ? int.tryParse(productIdString) : null;
-    }
+    // Always use the original product ID from the widget
+    _productId = _parseProductId(widget.product['product_id']);
 
     if (_productId != null) {
       await _fetchProductFilter(_productId!);
+    } else {
+      await _syncCartState();
     }
+    
+    _calculateMonthlyPaymentWithDebounce();
   }
 
   Future<void> _onSimChanged(String sim) async {
@@ -214,9 +470,259 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
       _markActiveOptions(_simOptions, 'sim_card_name', selectedSimCard);
     });
 
+    // Always use the original product ID from the widget
+    _productId = _parseProductId(widget.product['product_id']);
+
     if (_productId != null) {
       await _fetchProductFilter(_productId!);
+    } else {
+      await _syncCartState();
     }
+    
+    _calculateMonthlyPaymentWithDebounce();
+  }
+
+  Future<void> _navigateToCart() async {
+    if (!mounted) return;
+    
+    // Navigate back to MainLayout with cart index
+    Navigator.of(context).popUntil((route) {
+      return route.isFirst || route.settings.name == '/home';
+    });
+    
+    // Navigate to MainLayout with cart index
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (context) => MainLayout(
+          onThemeUpdate: null,
+          initialIndex: 2, // Cart page index
+        ),
+      ),
+    );
+    
+    if (!mounted) return;
+    await _syncCartState();
+  }
+
+  Future<void> _handleAddToCart() async {
+    final isUsed = _isUsedProduct(_currentProduct);
+    final productData = {
+      'id': _currentProduct['product_id'],
+      'name': _getProductName(_currentProduct),
+      'price': _getProductPrice(_currentProduct),
+      'image': _resolvePrimaryImage(),
+      'selectedColor': selectedColor,
+      'selectedStorage': selectedStorage,
+      'selectedSim': selectedSimCard,
+      'uniqueId': CartService.generateId(),
+      'quantity': 1,
+      'isUsed': isUsed,
+    };
+
+    try {
+      await CartService.addToCart(productData);
+      await _syncCartState();
+      if (!mounted) return;
+      CustomToast.show(
+        context,
+        message: 'Товар добавлен в корзину',
+        isSuccess: true,
+      );
+      await _navigateToCart();
+    } catch (_) {
+      if (!mounted) return;
+      CustomToast.show(
+        context,
+        message: 'Не удалось добавить товар. Попробуйте ещё раз.',
+        isSuccess: false,
+      );
+    }
+  }
+
+  Future<void> _changeCartQuantity(int delta) async {
+    if (delta == 0) return;
+
+    final uniqueId = _cartUniqueId;
+    final isUsed = _isUsedProduct(_currentProduct);
+    
+    if (uniqueId == null) {
+      if (delta > 0) {
+        await _handleAddToCart();
+      }
+      return;
+    }
+
+    final newQuantity = _cartQuantity + delta;
+    
+    debugPrint('🔍 _changeCartQuantity: isUsed=$isUsed, currentQuantity=$_cartQuantity, delta=$delta, newQuantity=$newQuantity');
+    
+    // Ishlatilgan mahsulotlar uchun miqdorni 1 ga cheklash
+    if (isUsed && newQuantity > 1) {
+      if (!mounted) return;
+      CustomToast.show(
+        context,
+        message: 'Б/у товар можно добавить только в количестве 1 штуки',
+        isSuccess: false,
+      );
+      return;
+    }
+
+    try {
+      if (newQuantity <= 0) {
+        await CartService.removeFromCart(uniqueId);
+        await _syncCartState();
+        if (!mounted) return;
+        CustomToast.show(
+          context,
+          message: 'Товар удалён из корзины',
+          isSuccess: true,
+        );
+      } else {
+        await CartService.updateQuantity(uniqueId, newQuantity);
+        await _syncCartState();
+      }
+    } catch (_) {
+      await _syncCartState();
+      if (!mounted) return;
+      CustomToast.show(
+        context,
+        message: 'Не удалось обновить корзину. Попробуйте ещё раз.',
+        isSuccess: false,
+      );
+    }
+  }
+
+  Widget _buildQuantitySelector() {
+    const accentColor = Color(0xFF2196F3);
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(12.r),
+      child: Container(
+        color: accentColor,
+        child: Row(
+          children: [
+            _buildQuantityControlButton(
+              icon: Icons.remove,
+              onTap: () => _changeCartQuantity(-1),
+            ),
+            Expanded(
+              child: Center(
+                child: Text(
+                  '$_cartQuantity',
+                  style: GoogleFonts.poppins(
+                    fontSize: 18.sp,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ),
+            _buildQuantityControlButton(
+              icon: Icons.add,
+              onTap: _isUsedProduct(_currentProduct) && _cartQuantity >= 1 
+                  ? null // Ishlatilgan mahsulot uchun o'chirish
+                  : () => _changeCartQuantity(1),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildQuantityControlButton({
+    required IconData icon,
+    required VoidCallback? onTap,
+  }) {
+    return SizedBox(
+      width: 56.w,
+      height: double.infinity,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          child: Center(
+            child: Icon(
+              icon,
+              color: Colors.white,
+              size: 24.w,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBottomAction() {
+    if (_cartQuantity > 0) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SizedBox(
+            height: 50.h,
+            child: _buildQuantitySelector(),
+          ),
+          SizedBox(height: 12.h),
+          SizedBox(
+            height: 48.h,
+            child: OutlinedButton(
+              onPressed: _navigateToCart,
+              style: OutlinedButton.styleFrom(
+                side: const BorderSide(color: Color(0xFF2196F3)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12.r),
+                ),
+              ),
+              child: Text(
+                'Перейти в корзину',
+                style: GoogleFonts.poppins(
+                  fontSize: 15.sp,
+                  fontWeight: FontWeight.w500,
+                  color: const Color(0xFF2196F3),
+                ),
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
+    return SizedBox(
+      width: double.infinity,
+      height: 50.h,
+      child: ElevatedButton(
+        onPressed: _handleAddToCart,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: const Color(0xFF2196F3),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12.r),
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            SvgPicture.asset(
+              'assets/svg/bag.svg',
+              width: 24.w,
+              height: 24.w,
+              colorFilter: const ColorFilter.mode(
+                Colors.white,
+                BlendMode.srcIn,
+              ),
+            ),
+            SizedBox(width: 8.w),
+            Text(
+              'Добавить в корзину',
+              style: GoogleFonts.poppins(
+                fontSize: 16.sp,
+                fontWeight: FontWeight.w600,
+                color: Colors.white,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -257,7 +763,7 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                                _currentProduct['name']?.toString() ?? 'Название продукта',
+                                _getProductName(_currentProduct),
                             style: GoogleFonts.poppins(
                               fontSize: 24,
                               fontWeight: FontWeight.w500,
@@ -266,19 +772,21 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
                           ),
                           SizedBox(height: 5),
                           Text(
-                                _formatPriceValue(_currentProduct['price']),
+                                _formatPriceValue(_getProductPrice(_currentProduct)),
                             style: GoogleFonts.poppins(
                               fontSize: 24,
                               fontWeight: FontWeight.w600,
                               color: textColor,
                             ),
                           ),
+                          if (_colorOptions.isNotEmpty || _storageOptions.isNotEmpty || _simOptions.isNotEmpty) ...[
                           SizedBox(height: 24.h),
                           ProductSectionCard(
                             backgroundColor: sectionBackground,
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
+                                  if (_colorOptions.isNotEmpty) ...[
                                 ProductOptionSection(
                                   title: 'Цвет',
                                   options: _buildOptionViewData(
@@ -291,6 +799,8 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
                                   borderColor: borderColor,
                                   subtitleColor: subtitleColor,
                                 ),
+                                  ],
+                                  if (_storageOptions.isNotEmpty) ...[
                                 SizedBox(height: 24.h),
                                 ProductOptionSection(
                                   title: 'Память',
@@ -304,6 +814,7 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
                                   borderColor: borderColor,
                                   subtitleColor: subtitleColor,
                                 ),
+                                  ],
                                 if (_simOptions.isNotEmpty) ...[
                                   SizedBox(height: 24.h),
                                   ProductOptionSection(
@@ -312,8 +823,7 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
                                       _simOptions,
                                       'sim_card_name',
                                     ),
-                                    emptyMessage:
-                                        'Нет доступных вариантов SIM-карт',
+                                        emptyMessage: 'Нет доступных вариантов SIM-карт',
                                     onOptionTap: _onSimChanged,
                                     textColor: textColor,
                                     borderColor: borderColor,
@@ -323,6 +833,8 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
                               ],
                             ),
                           ),
+                          ],
+                          if (_buildSpecificationItems().isNotEmpty) ...[
                           SizedBox(height: 24.h),
                           ProductSpecificationsSection(
                             title: 'Характеристики',
@@ -331,19 +843,24 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
                             subtitleColor: subtitleColor,
                             backgroundColor: sectionBackground,
                           ),
+                          ],
                           SizedBox(height: 24.h),
                           ProductFinancialSection(
                             backgroundColor: sectionBackground,
                             borderColor: borderColor,
                             textColor: textColor,
                             subtitleColor: subtitleColor,
-                            downPayment: _formatPriceValue(downPayment),
-                            note:
-                                'Будет распределен между товарами пропорционально их стоимости',
-                            installmentSelector:
-                                _buildInstallmentPeriod(textColor, borderColor),
-                            totalPrice:
-                                _formatPriceValue(_currentProduct['price'] ?? 0),
+                            downPayment: downPayment,
+                            maxDownPayment: (_parseNumericValue(_getProductPrice(_currentProduct)) ?? 0).toInt(),
+                            onDownPaymentChanged: (value) {
+                              setState(() {
+                                downPayment = value;
+                              });
+                              _calculateMonthlyPaymentWithDebounce();
+                            },
+                                note: 'Будет распределен между товарами пропорционально их стоимости',
+                                installmentSelector: _buildInstallmentPeriod(textColor, borderColor),
+                                totalPrice: '', // Hide price
                             monthlyText: _formatMonthlyPayment(),
                           ),
                           SizedBox(height: 20),
@@ -361,49 +878,7 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
               ),
               child: SafeArea(
                 top: false,
-                child: SizedBox(
-                  width: double.infinity,
-                  height: 50.h,
-                  child: ElevatedButton(
-                        onPressed: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => const PhoneInputPage(),
-                            ),
-                          );
-                        },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF2196F3),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12.r),
-                      ),
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                            SvgPicture.asset(
-                              'assets/svg/bag.svg',
-                              width: 24.w,
-                              height: 24.w,
-                              colorFilter: const ColorFilter.mode(
-                                Colors.white,
-                                BlendMode.srcIn,
-                              ),
-                            ),
-                        SizedBox(width: 8.w),
-                        Text(
-                          'Оформить',
-                          style: GoogleFonts.poppins(
-                            fontSize: 16.sp,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.white,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                    ),
+                    child: _buildBottomAction(),
                   ),
                 ),
               ],
@@ -444,7 +919,7 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             Text(
-              installmentPeriod,
+              _getSelectedTariffName(),
               style: GoogleFonts.poppins(
                 fontSize: 16.sp,
                 color: textColor,
@@ -464,102 +939,139 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
   void _showSelectModal() {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final modalColor = isDark ? const Color(0xFF2A2A2A) : Colors.white;
-    final optionSelectedColor =
-        isDark ? (Colors.grey[700] ?? Colors.grey) : (Colors.grey[200] ?? Colors.grey);
-    final optionBorderColor =
-        isDark ? (Colors.grey[600] ?? Colors.grey) : (Colors.grey[300] ?? Colors.grey);
     final optionTextColor = isDark ? Colors.white : Colors.black87;
-
-    final RenderBox? renderBox = _selectKey.currentContext?.findRenderObject() as RenderBox?;
-    final position = renderBox?.localToGlobal(Offset.zero);
-    final size = renderBox?.size;
     final screenHeight = MediaQuery.of(context).size.height;
-    
-    // Calculate modal height (approximate)
-    final modalHeight = periods.length * (16.h * 2 + 16.h); // padding + text height
-    final spaceBelow = screenHeight - (position?.dy ?? 0) - (size?.height ?? 0);
-    final spaceAbove = (position?.dy ?? 0);
-    
-    // Determine if modal should open above or below
-    final openBelow = spaceBelow >= modalHeight || spaceBelow > spaceAbove;
-    final modalTop = openBelow 
-        ? (position?.dy ?? 0) + (size?.height ?? 0) + 12
-        : (position?.dy ?? 0) - modalHeight - 12;
+    final screenWidth = MediaQuery.of(context).size.width;
 
     showDialog(
       context: context,
-      barrierColor: Colors.transparent,
+      barrierColor: Colors.black.withOpacity(0.5),
       builder: (BuildContext dialogContext) {
         return GestureDetector(
           onTap: () {
             Navigator.of(dialogContext).pop();
           },
-          child: Container(
-            color: Colors.transparent,
-            child: Stack(
-              children: [
-                Positioned(
-                  top: modalTop > 0 ? modalTop : 12,
-                  left: 16,
-                  right: 16,
-                  child: GestureDetector(
-                    onTap: () {},
-                    child: Container(
-                      constraints: BoxConstraints(
-                        maxHeight: screenHeight - (modalTop > 0 ? modalTop : 12) - 20,
+          child: Scaffold(
+            backgroundColor: Colors.transparent,
+            body: Center(
+              child: GestureDetector(
+                onTap: () {}, // Prevent closing when tapping inside modal
+                child: Container(
+                  width: screenWidth * 0.8, // 80% width
+                  constraints: BoxConstraints(
+                    maxHeight: screenHeight * 0.7, // 70vh max height
+                  ),
+                  decoration: BoxDecoration(
+                    color: modalColor,
+                    borderRadius: BorderRadius.circular(16.r),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.25),
+                        blurRadius: 20,
+                        offset: Offset(0, 8),
                       ),
-                      decoration: BoxDecoration(
-                        color: modalColor,
-                        borderRadius: BorderRadius.circular(12.r),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.25),
-                            blurRadius: 10,
-                            offset: Offset(0, 4),
+                    ],
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Header
+                      Container(
+                        padding: EdgeInsets.all(20.w),
+                        decoration: BoxDecoration(
+                          border: Border(
+                            bottom: BorderSide(
+                              color: isDark ? Colors.grey[600]! : Colors.grey[300]!,
+                              width: 1,
+                            ),
                           ),
-                        ],
-                      ),
-                      child: SingleChildScrollView(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: periods.map((period) {
-                            final isSelected = installmentPeriod == period;
-                            
-                            return GestureDetector(
-                              onTap: () {
-                                setState(() {
-                                  installmentPeriod = period;
-                                });
-                                Navigator.of(dialogContext).pop();
-                              },
-                              child: Container(
-                                width: double.infinity,
-                                padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 16.h),
-                                decoration: BoxDecoration(
-                                  color: isSelected ? optionSelectedColor : Colors.transparent,
-                                  border: Border(
-                                    top: period != periods.first
-                                        ? BorderSide(color: optionBorderColor, width: 1)
-                                        : BorderSide.none,
-                                  ),
-                                ),
-                                child: Text(
-                                  period,
-          style: GoogleFonts.poppins(
-            fontSize: 16.sp,
-                                    color: optionTextColor,
-                                    decoration: TextDecoration.none,
-                                  ),
-                                ),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              'Срок рассрочки',
+                              style: GoogleFonts.poppins(
+                                fontSize: 18.sp,
+                                fontWeight: FontWeight.w600,
+                                color: optionTextColor,
                               ),
-                            );
-                          }).toList(),
+                            ),
+                            GestureDetector(
+                              onTap: () => Navigator.of(dialogContext).pop(),
+                              child: Icon(
+                                Icons.close,
+                                color: optionTextColor,
+                                size: 24.w,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                    ),
+                      
+                      // Scrollable tariff list
+                      Flexible(
+                        child: SingleChildScrollView(
+                          child: Column(
+                            children: _tariffs.map((tariff) {
+                              final tariffId = tariff['id'].toString();
+                              final isSelected = _selectedTariffId == tariffId;
+                              
+                              return GestureDetector(
+                                onTap: () {
+                                  setState(() {
+                                    _selectedTariffId = tariffId;
+                                  });
+                                  Navigator.of(dialogContext).pop();
+                                  _calculateMonthlyPaymentWithDebounce();
+                                },
+                                child: Container(
+                                  width: double.infinity,
+                                  padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 16.h),
+                                  decoration: BoxDecoration(
+                                    color: isSelected 
+                                        ? (isDark ? Colors.green.withOpacity(0.1) : Colors.green.withOpacity(0.05))
+                                        : Colors.transparent,
+                                    border: Border(
+                                      bottom: tariff != _tariffs.last
+                                          ? BorderSide(
+                                              color: isDark ? Colors.grey[700]! : Colors.grey[200]!,
+                                              width: 0.5,
+                                            )
+                                          : BorderSide.none,
+                                    ),
+                                  ),
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          _formatTariffName(tariff),
+                                          style: GoogleFonts.poppins(
+                                            fontSize: 16.sp,
+                                            fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                                            color: isSelected ? Colors.green : optionTextColor,
+                                          ),
+                                        ),
+                                      ),
+                                      if (isSelected)
+                                        Icon(
+                                          Icons.check_circle,
+                                          color: Colors.green,
+                                          size: 24.w,
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-              ],
+              ),
             ),
           ),
         );
@@ -568,18 +1080,29 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
   }
 
   Widget _buildProductImage(Color fallbackBgColor, Color fallbackTextColor) {
-    final images = _currentProduct['images'];
-    List<String> imageUrls = [];
-    if (images is List && images.isNotEmpty) {
-      imageUrls = images.map<String>((img) {
-        if (img is Map && img['image'] is String) {
-          return img['image'] as String;
-        }
-        if (img is String) return img;
-        return '';
-      }).where((url) => url.isNotEmpty).toList();
-    } else if (images is String && images.isNotEmpty) {
-      imageUrls = [images];
+    List<String> imageUrls = _getCurrentVariationImages();
+    
+    // If no variation images found, fallback to product level image
+    if (imageUrls.isEmpty) {
+      if (_currentProduct['image'] is String && _currentProduct['image'].isNotEmpty) {
+        imageUrls.add(_currentProduct['image'] as String);
+      }
+    }
+
+    // Fallback to old structure if still no images
+    if (imageUrls.isEmpty) {
+      final images = _currentProduct['images'];
+      if (images is List && images.isNotEmpty) {
+        imageUrls = images.map<String>((img) {
+          if (img is Map && img['image'] is String) {
+            return img['image'] as String;
+          }
+          if (img is String) return img;
+          return '';
+        }).where((url) => url.isNotEmpty).toList();
+      } else if (images is String && images.isNotEmpty) {
+        imageUrls = [images];
+      }
     }
 
     if (imageUrls.isEmpty) {
@@ -591,7 +1114,7 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
           borderRadius: BorderRadius.circular(12.r),
         ),
         child: ProductCardHelpers.fallbackImage(
-          _currentProduct['name']?.toString(),
+          _getProductName(_currentProduct),
           fallbackBgColor,
           fallbackTextColor,
           width: double.infinity,
@@ -642,7 +1165,7 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
               borderRadius: BorderRadius.circular(12.r),
             ),
             child: ProductCardHelpers.fallbackImage(
-              _currentProduct['name']?.toString(),
+              _getProductName(_currentProduct),
               fallbackBgColor,
               fallbackTextColor,
               width: double.infinity,
@@ -655,7 +1178,7 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
 
     return _ProductImageCarousel(
       imageUrls: imageUrls,
-      productName: _currentProduct['name']?.toString(),
+      productName: _getProductName(_currentProduct),
       fallbackBgColor: fallbackBgColor,
       fallbackTextColor: fallbackTextColor,
     );
@@ -691,11 +1214,14 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
                   .map((detail) => detail['value']?.toString().trim() ?? '')
                   .where((value) => value.isNotEmpty)
                   .join(', ')
-              : '-';
+              : '';
+
+          // Faqat qiymati bo'lgan xususiyatlarni qaytarish
+          if (value.isEmpty || value == '-') return null;
 
           return SpecificationItem(
             name: name,
-            value: value.isEmpty ? '-' : value,
+            value: value,
           );
         })
         .whereType<SpecificationItem>()
@@ -744,13 +1270,262 @@ double? _parseNumericValue(dynamic value) {
   }
 
   String _formatMonthlyPayment() {
-    final amount = _parseNumericValue(_currentProduct['price']);
-    if (amount == null || amount <= 0) {
-      return 'В рассрочку';
+    if (_isCalculating) {
+      return 'Рассчитываем...';
     }
-    const months = 12;
-    final monthly = amount / months;
-    return 'В рассрочку ${_formatUsdAmount(monthly)} в мес';
+    
+    if (_calculatedMonthlyText != null) {
+      final monthlyAmount = _parseNumericValue(_calculatedMonthlyText);
+      if (monthlyAmount != null && monthlyAmount > 0) {
+        return 'В рассрочку \$${monthlyAmount.toInt()} в мес';
+      }
+    }
+    
+    return 'В рассрочку';
+  }
+
+  String? _resolvePrimaryImage() {
+    // Check direct image field first (new structure)
+    if (_currentProduct['image'] is String && _currentProduct['image'].isNotEmpty) {
+      return _currentProduct['image'] as String;
+    }
+
+    // Check variations for images
+    final variations = _currentProduct['variations'];
+    if (variations is List && variations.isNotEmpty) {
+      for (final variation in variations) {
+        if (variation['image'] is String && variation['image'].isNotEmpty) {
+          return variation['image'] as String;
+        }
+      }
+    }
+
+    // Fallback to old structure
+    final images = _currentProduct['images'];
+    if (images is List && images.isNotEmpty) {
+      for (final image in images) {
+        if (image is Map && image['image'] is String && (image['image'] as String).isNotEmpty) {
+          return image['image'] as String;
+        }
+        if (image is String && image.isNotEmpty) {
+          return image;
+        }
+      }
+    } else if (images is Map && images['image'] is String && (images['image'] as String).isNotEmpty) {
+      return images['image'] as String;
+    } else if (images is String && images.isNotEmpty) {
+      return images;
+    }
+    return null;
+  }
+
+  String _getProductName(Map<String, dynamic> product) {
+    return 
+           product['product_name']?.toString() ?? 
+           product['name']?.toString() ?? 
+           'Название продукта';
+  }
+
+  bool _isUsedProduct(Map<String, dynamic> product) {
+    // API dan kelayotgan 'used' fieldini tekshirish
+    // used: 1 = ishlatilgan (б/у)
+    // used: 2 = yangi
+    final used = product['used'];
+    final isUsed = used == 1;
+    debugPrint('🔍 _isUsedProduct: used=$used, isUsed=$isUsed, productName=${_getProductName(product)}');
+    return isUsed;
+  }
+
+  dynamic _getProductPrice(Map<String, dynamic> product) {
+    // Get price from current selected variation first
+    final currentVariation = _findCurrentVariation();
+    
+    if (currentVariation != null && currentVariation['price'] != null) {
+      final price = currentVariation['price'];
+      return price;
+    }
+
+    // If product price is not null, use it
+    if (product['price'] != null) {
+      return product['price'];
+    }
+
+    // If product price is null, get price from default variation
+    final variations = product['variations'];
+    if (variations is List && variations.isNotEmpty) {
+      // Find default variation (is_default: true)
+      final defaultVariation = variations.firstWhere(
+        (v) => v['is_default'] == true,
+        orElse: () => variations.first,
+      );
+      
+      if (defaultVariation['price'] != null) {
+        return defaultVariation['price'];
+      }
+    }
+
+    return 0;
+  }
+
+  String _getSelectedTariffName() {
+    if (_selectedTariffId == null || _tariffs.isEmpty) {
+      return 'Выберите срок'; // fallback
+    }
+    
+    final selectedTariff = _tariffs.firstWhere(
+      (t) => t['id'].toString() == _selectedTariffId,
+      orElse: () => _tariffs.first,
+    );
+    
+    return _formatTariffName(selectedTariff);
+  }
+
+  String _formatTariffName(Map<String, dynamic> tariff) {
+    final name = tariff['name']?.toString() ?? '';
+    final paymentsCount = tariff['payments_count'] as int? ?? 0;
+    final offsetDays = tariff['offset_days'] as int? ?? 0;
+    
+    // Handle special cases
+    if (name == 'No installment' || paymentsCount == 0) {
+      return 'Без рассрочки';
+    }
+    
+    // Handle days-only installments (like 15d) - must be exactly "15d", not contain it
+    if (name == '15d' || (paymentsCount == 1 && offsetDays == -15)) {
+      return '15 дней';
+    }
+    
+    // Handle monthly payments with offset days
+    if (paymentsCount > 0) {
+      String result = '${paymentsCount} мес';
+      
+      // Add offset days if present
+      if (offsetDays > 0) {
+        result += ' (+${offsetDays}д)';
+      } else if (offsetDays < 0) {
+        result += ' (${offsetDays}д)';
+      }
+      
+      return result;
+    }
+    
+    // Fallback to original name
+    return name;
+  }
+
+  double _getSelectedTariffCoefficient() {
+    if (_selectedTariffId == null || _tariffs.isEmpty) {
+      return 1.081; // 1 month coefficient as fallback
+    }
+    
+    final selectedTariff = _tariffs.firstWhere(
+      (t) => t['id'].toString() == _selectedTariffId,
+      orElse: () => _tariffs.first,
+    );
+    
+    return (selectedTariff['coefficient'] as num?)?.toDouble() ?? 1.0;
+  }
+
+  int? _getCurrentVariationId() {
+    final currentVariation = _findCurrentVariation();
+    if (currentVariation == null) {
+      return null;
+    }
+
+    final variationId = currentVariation['variation_id'];
+    if (variationId is String) {
+      return int.tryParse(variationId);
+    } else if (variationId is int) {
+      return variationId;
+    }
+
+    return null;
+  }
+
+  List<String> _getCurrentVariationImages() {
+    final variations = _currentProduct['variations'];
+    if (variations is! List || variations.isEmpty) {
+      return [];
+    }
+
+    // Find current selected variation
+    final currentVariation = _findCurrentVariation();
+    if (currentVariation != null && currentVariation['image'] is String && currentVariation['image'].isNotEmpty) {
+      final imageUrl = currentVariation['image'] as String;
+      return [imageUrl];
+    }
+
+    
+    // If no current variation found, collect all variation images
+    final imageUrls = <String>[];
+    for (final variation in variations) {
+      if (variation['image'] is String && variation['image'].isNotEmpty) {
+        final imageUrl = variation['image'] as String;
+        if (!imageUrls.contains(imageUrl)) {
+          imageUrls.add(imageUrl);
+        }
+      }
+    }
+
+    return imageUrls;
+  }
+
+  Map<String, dynamic>? _findCurrentVariation() {
+    final variations = _currentProduct['variations'];
+    if (variations is! List || variations.isEmpty) {
+      return null;
+    }
+
+
+    // Try to find exact match first
+    for (final variation in variations) {
+      final variationColor = variation['color']?.toString() ?? '';
+      final variationStorage = variation['storage']?.toString() ?? '';
+      final variationSim = variation['sim']?.toString() ?? '';
+      
+      final matchesColor = selectedColor == null || selectedColor == variationColor;
+      final matchesStorage = selectedStorage == null || selectedStorage == variationStorage;
+      final matchesSim = selectedSimCard == null || selectedSimCard == variationSim;
+      
+      if (matchesColor && matchesStorage && matchesSim) {
+        return variation;
+      }
+    }
+
+    // If no exact match, try partial matches with priority: Color > Storage > SIM
+    Map<String, dynamic>? bestMatch;
+    int bestScore = 0;
+    
+    for (final variation in variations) {
+      final variationColor = variation['color']?.toString() ?? '';
+      final variationStorage = variation['storage']?.toString() ?? '';
+      final variationSim = variation['sim']?.toString() ?? '';
+      
+      int score = 0;
+      if (selectedColor != null && selectedColor == variationColor) score += 3;
+      if (selectedStorage != null && selectedStorage == variationStorage) score += 2;
+      if (selectedSimCard != null && selectedSimCard == variationSim) score += 1;
+      
+      
+      if (score > bestScore) {
+        bestScore = score;
+        bestMatch = variation;
+      }
+    }
+
+    if (bestMatch != null) {
+      return bestMatch;
+    }
+
+    // If no partial match, try to find default variation
+    for (final variation in variations) {
+      if (variation['is_default'] == true) {
+        return variation;
+      }
+    }
+
+    // If still no match, use first variation
+    return variations.first;
   }
 }
 

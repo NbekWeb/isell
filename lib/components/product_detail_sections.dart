@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:google_fonts/google_fonts.dart';
 
@@ -231,7 +232,7 @@ class ProductSpecificationsSection extends StatelessWidget {
   }
 }
 
-class ProductFinancialSection extends StatelessWidget {
+class ProductFinancialSection extends StatefulWidget {
   const ProductFinancialSection({
     super.key,
     required this.backgroundColor,
@@ -239,6 +240,8 @@ class ProductFinancialSection extends StatelessWidget {
     required this.textColor,
     required this.subtitleColor,
     required this.downPayment,
+    required this.maxDownPayment,
+    required this.onDownPaymentChanged,
     required this.note,
     required this.installmentSelector,
     required this.totalPrice,
@@ -249,16 +252,47 @@ class ProductFinancialSection extends StatelessWidget {
   final Color borderColor;
   final Color textColor;
   final Color subtitleColor;
-  final String downPayment;
+  final int downPayment;
+  final int maxDownPayment;
+  final Function(int) onDownPaymentChanged;
   final String note;
   final Widget installmentSelector;
   final String totalPrice;
   final String monthlyText;
 
   @override
+  State<ProductFinancialSection> createState() => _ProductFinancialSectionState();
+}
+
+class _ProductFinancialSectionState extends State<ProductFinancialSection> {
+  late TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(
+      text: widget.downPayment == 0 ? '' : widget.downPayment.toString(),
+    );
+  }
+
+  @override
+  void didUpdateWidget(ProductFinancialSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.downPayment != widget.downPayment) {
+      _controller.text = widget.downPayment == 0 ? '' : widget.downPayment.toString();
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return ProductSectionCard(
-      backgroundColor: backgroundColor,
+      backgroundColor: widget.backgroundColor,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -267,35 +301,74 @@ class ProductFinancialSection extends StatelessWidget {
             style: GoogleFonts.poppins(
               fontSize: 18.sp,
               fontWeight: FontWeight.w600,
-              color: textColor,
+              color: widget.textColor,
             ),
           ),
           SizedBox(height: 12.h),
           Container(
             width: double.infinity,
-            padding: EdgeInsets.symmetric(vertical: 12.h),
             decoration: BoxDecoration(
               color: Colors.transparent,
-              border: Border.all(color: borderColor, width: 1),
+              border: Border.all(color: widget.borderColor, width: 1),
               borderRadius: BorderRadius.circular(12.r),
             ),
-            child: Center(
-              child: Text(
-                downPayment,
-                style: GoogleFonts.poppins(
-                  color: textColor,
+            child: TextFormField(
+              controller: _controller,
+              keyboardType: TextInputType.number,
+              inputFormatters: [
+                FilteringTextInputFormatter.digitsOnly,
+                LengthLimitingTextInputFormatter(10), // Limit to 10 digits
+              ],
+              textAlign: TextAlign.center,
+              style: GoogleFonts.poppins(
+                color: widget.textColor,
+                fontSize: 16.sp,
+                fontWeight: FontWeight.w500,
+              ),
+              decoration: InputDecoration(
+                border: InputBorder.none,
+                contentPadding: EdgeInsets.symmetric(vertical: 12.h, horizontal: 16.w),
+                hintText: '0',
+                hintStyle: GoogleFonts.poppins(
+                  color: widget.textColor.withOpacity(0.5),
+                  fontSize: 16.sp,
+                ),
+                prefixText: '\$',
+                prefixStyle: GoogleFonts.poppins(
+                  color: widget.textColor,
                   fontSize: 16.sp,
                   fontWeight: FontWeight.w500,
                 ),
               ),
+              onChanged: (value) {
+                // Remove any non-digit characters
+                final cleanValue = value.replaceAll(RegExp(r'[^\d]'), '');
+                
+                // Parse the value, handle empty string as 0
+                final intValue = cleanValue.isEmpty ? 0 : int.tryParse(cleanValue) ?? 0;
+                
+                // Clamp the value between 0 and maxDownPayment
+                final clampedValue = intValue.clamp(0, widget.maxDownPayment);
+                
+                // Update controller if the value was clamped
+                if (clampedValue != intValue) {
+                  final newText = clampedValue == 0 ? '' : clampedValue.toString();
+                  _controller.value = _controller.value.copyWith(
+                    text: newText,
+                    selection: TextSelection.collapsed(offset: newText.length),
+                  );
+                }
+                
+                widget.onDownPaymentChanged(clampedValue);
+              },
             ),
           ),
           SizedBox(height: 8.h),
           Text(
-            note,
+            widget.note,
             style: GoogleFonts.poppins(
               fontSize: 12.sp,
-              color: subtitleColor,
+              color: widget.subtitleColor,
             ),
           ),
           SizedBox(height: 24.h),
@@ -304,23 +377,25 @@ class ProductFinancialSection extends StatelessWidget {
             style: GoogleFonts.poppins(
               fontSize: 18.sp,
               fontWeight: FontWeight.w600,
-              color: textColor,
+              color: widget.textColor,
             ),
           ),
           SizedBox(height: 12.h),
-          installmentSelector,
+          widget.installmentSelector,
           SizedBox(height: 24.h),
-          Text(
-            totalPrice,
-            style: GoogleFonts.poppins(
-              fontSize: 20.sp,
-              fontWeight: FontWeight.bold,
-              color: textColor,
+          if (widget.totalPrice.isNotEmpty) ...[
+            Text(
+              widget.totalPrice,
+              style: GoogleFonts.poppins(
+                fontSize: 20.sp,
+                fontWeight: FontWeight.bold,
+                color: widget.textColor,
+              ),
             ),
-          ),
-          SizedBox(height: 4.h),
+            SizedBox(height: 4.h),
+          ],
           Text(
-            monthlyText,
+            widget.monthlyText,
             style: GoogleFonts.poppins(
               fontSize: 16.sp,
               color: const Color(0xFF2196F3),

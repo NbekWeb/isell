@@ -49,8 +49,6 @@
 		<false/>
 		<key>UIViewControllerBasedStatusBarAppearance</key>
 		<false/>
-		<key>NSCameraUsageDescription</key>
-		<string>Required for document and facial capture</string>
 		<key>LSApplicationQueriesSchemes</key>
 		<array>
 			<string>http</string>
@@ -58,5 +56,11 @@
 		</array>
 		<key>YANDEX_MAPKIT_API_KEY</key>
 		<string>491a85a5-7445-4d5d-a419-84bda4ad6328</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Required for document and facial capture</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Required for showing company locations on map</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Required for showing company locations on map</string>
 	</dict>
 </plist>

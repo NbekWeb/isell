@@ -6,29 +6,42 @@ plugins {
 }
 
 android {
-    namespace = "com.example.isell"
+    namespace = "com.nbekdev.isell"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
+        sourceCompatibility = JavaVersion.VERSION_1_8
+        targetCompatibility = JavaVersion.VERSION_1_8
     }
 
     kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_11.toString()
+        jvmTarget = JavaVersion.VERSION_1_8.toString()
     }
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.isell"
+        applicationId = "com.nbekdev.isell"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = 26  // Required by yandex_mapkit
+        minSdk = 26  // Required by yandex_mapkit (MyID SDK requires minSdk 21+)
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
+
+    // Optional: APK split by ABI to reduce app size
+    // Uncomment if you want to optimize APK size for different architectures
+    /*
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("x86", "x86_64", "arm64-v8a", "armeabi-v7a")
+            isUniversalApk = false
+        }
+    }
+    */
 
     buildTypes {
         release {
@@ -41,4 +54,11 @@ android {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    // MyID SDK dependencies
+    implementation("uz.myid.sdk.capture:myid-capture-sdk:3.0.3")
+    // Uncomment if using VideoIdentification entry mode:
+    // implementation("uz.myid.sdk.capture:myid-video-capture-sdk:3.0.3")
 }

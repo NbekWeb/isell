@@ -244,6 +244,7 @@ class _CompanyAddressesPageState extends State<CompanyAddressesPage> {
                       ),
                     ),
                     
+                    
                     // Dots indicator
                     if (_addresses.length > 1)
                       SizedBox(

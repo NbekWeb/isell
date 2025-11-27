@@ -68,7 +68,8 @@ class _HomePageState extends State<HomePage> {
     final results = List<Map<String, dynamic>>.from(
       (response['results'] as List<dynamic>? ?? <dynamic>[]),
     );
-    final totalPages = response['total_pages'] as int;
+    final count = response['count'] as int? ?? 0;
+    final totalPages = (count / 10).ceil(); // 10 is page_size
 
     debugPrint(
       'Fetched ${results.length} products (page $page of $totalPages)${search != null ? ' for search: $search' : ''}',

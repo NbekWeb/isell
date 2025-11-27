@@ -4,11 +4,12 @@ import 'api_service.dart';
 class OrderServices {
   static Future<List<Map<String, dynamic>>> getCompanyAddresses() async {
     try {
+      print('🔵 Fetching company addresses from: info/company-addresses/');
       final Response response = await ApiService.request(
-        url: 'order/company-addresses/',
+        url: 'info/company-addresses/',
         method: 'GET',
       );
-
+      print('🔵 Company Addresses API Response: ${response.data}');
       final data = response.data;
 
       if (data is List) {
@@ -25,4 +26,3 @@ class OrderServices {
     return <Map<String, dynamic>>[];
   }
 }
-

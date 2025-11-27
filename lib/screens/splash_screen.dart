@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../services/theme_service.dart';
+import '../services/user_service.dart';
 
 class SplashScreen extends StatefulWidget {
   final Function(ThemeMode)? onThemeUpdate;
@@ -61,9 +63,42 @@ class _SplashScreenState extends State<SplashScreen>
   void _startSplashSequence() async {
     await _animationController.forward();
 
+    // Check for access token and fetch user data if available
+    await _checkAuthAndFetchUser();
+
     // Animation is 2 seconds, navigate immediately after
     if (mounted) {
       Navigator.of(context).pushReplacementNamed('/home');
+    }
+  }
+
+  Future<void> _checkAuthAndFetchUser() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final accessToken = prefs.getString('accessToken');
+      
+      print('🔍 Splash - Checking access token: ${accessToken != null ? "Found" : "Not found"}');
+      
+      if (accessToken != null && accessToken.isNotEmpty) {
+        print('✅ Access token found, fetching user data...');
+        
+        // Fetch current user data from API
+        final result = await UserService.getCurrentUser();
+        
+        if (result != null && result['success'] == true) {
+          print('✅ User data fetched successfully in splash');
+          print('📋 User: ${result['data']}');
+        } else {
+          print('❌ Failed to fetch user data: ${result?['error']}');
+          // Clear invalid token
+          await prefs.remove('accessToken');
+          await prefs.remove('refreshToken');
+        }
+      } else {
+        print('ℹ️ No access token found, user not logged in');
+      }
+    } catch (e) {
+      print('❌ Error in splash auth check: $e');
     }
   }
 

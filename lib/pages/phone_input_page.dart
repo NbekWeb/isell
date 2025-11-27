@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:google_fonts/google_fonts.dart';
+import '../services/auth_service.dart';
 import '../widgets/custom_toast.dart';
 import 'sms_code_page.dart';
 
@@ -14,75 +15,103 @@ class PhoneInputPage extends StatefulWidget {
 
 class _PhoneInputPageState extends State<PhoneInputPage> {
   final TextEditingController _phoneController = TextEditingController();
-  final FocusNode _focusNode = FocusNode();
+  bool _isButtonEnabled = false;
+  bool _isLoading = false;
 
   @override
   void initState() {
     super.initState();
+    _phoneController.addListener(_onPhoneChanged);
+    // Set initial value with +998 prefix
     _phoneController.text = '+998 ';
-    _focusNode.requestFocus();
   }
 
   @override
   void dispose() {
+    _phoneController.removeListener(_onPhoneChanged);
     _phoneController.dispose();
-    _focusNode.dispose();
     super.dispose();
   }
 
-  String _formatPhoneNumber(String value) {
-    // Remove all non-digit characters
-    String digits = value.replaceAll(RegExp(r'[^\d]'), '');
+  void _onPhoneChanged() {
+    final text = _phoneController.text.replaceAll(' ', '');
+    final isValid = text.length == 13 && text.startsWith('+998');
     
-    // If starts with 998, keep it, otherwise add 998
-    if (digits.startsWith('998')) {
-      digits = digits.substring(3);
-    }
-    
-    // Limit to 9 digits (Uzbekistan mobile number)
-    if (digits.length > 9) {
-      digits = digits.substring(0, 9);
-    }
-    
-    // Format: +998 XX XXX XX XX
-    if (digits.isEmpty) {
-      return '+998 ';
-    } else if (digits.length <= 2) {
-      return '+998 $digits';
-    } else if (digits.length <= 5) {
-      return '+998 ${digits.substring(0, 2)} ${digits.substring(2)}';
-    } else if (digits.length <= 7) {
-      return '+998 ${digits.substring(0, 2)} ${digits.substring(2, 5)} ${digits.substring(5)}';
-    } else {
-      return '+998 ${digits.substring(0, 2)} ${digits.substring(2, 5)} ${digits.substring(5, 7)} ${digits.substring(7)}';
-    }
-  }
-
-  void _onPhoneChanged(String value) {
-    final formatted = _formatPhoneNumber(value);
-    if (_phoneController.text != formatted) {
+    if (_isButtonEnabled != isValid) {
       setState(() {
-        _phoneController.value = TextEditingValue(
-          text: formatted,
-          selection: TextSelection.collapsed(offset: formatted.length),
-        );
+        _isButtonEnabled = isValid;
       });
-    } else {
-      setState(() {});
     }
   }
 
-  bool _isValidPhone() {
-    final digits = _phoneController.text.replaceAll(RegExp(r'[^\d]'), '');
-    return digits.length == 12 && digits.startsWith('998');
+  String _formatPhoneNumber(String value) {
+    // Remove all non-digit characters except +
+    String digitsOnly = value.replaceAll(RegExp(r'[^\d+]'), '');
+    
+    // Ensure it starts with +998
+    if (!digitsOnly.startsWith('+998')) {
+      digitsOnly = '+998';
+    }
+    
+    // Limit to +998 + 9 digits
+    if (digitsOnly.length > 13) {
+      digitsOnly = digitsOnly.substring(0, 13);
+    }
+    
+    // Format: +998 91 999 99 99
+    if (digitsOnly.length > 4) {
+      String formatted = '+998';
+      String remaining = digitsOnly.substring(4);
+      
+      if (remaining.length >= 2) {
+        formatted += ' ${remaining.substring(0, 2)}';
+        remaining = remaining.substring(2);
+        
+        if (remaining.length >= 3) {
+          formatted += ' ${remaining.substring(0, 3)}';
+          remaining = remaining.substring(3);
+          
+          if (remaining.length >= 2) {
+            formatted += ' ${remaining.substring(0, 2)}';
+            remaining = remaining.substring(2);
+            
+            if (remaining.length >= 2) {
+              formatted += ' ${remaining.substring(0, 2)}';
+            } else if (remaining.isNotEmpty) {
+              formatted += ' $remaining';
+            }
+          } else if (remaining.isNotEmpty) {
+            formatted += ' $remaining';
+          }
+        } else if (remaining.isNotEmpty) {
+          formatted += ' $remaining';
+        }
+      } else if (remaining.isNotEmpty) {
+        formatted += ' $remaining';
+      }
+      
+      return formatted;
+    }
+    
+    return digitsOnly;
   }
 
-  void _onContinue() {
-    if (_isValidPhone()) {
-      // Show toast
+  Future<void> _onContinue() async {
+    if (!_isButtonEnabled || _isLoading) return;
+
+    setState(() {
+      _isLoading = true;
+    });
+
+    try {
+      final phoneNumber = _phoneController.text.replaceAll(' ', '');
+      
+      final result = await AuthService.login(phoneNumber: phoneNumber);
+
+      if (result != null && result['success'] == true) {
       CustomToast.show(
         context,
-        message: 'SMS отправлен',
+          message: 'SMS код отправлен',
         isSuccess: true,
       );
       
@@ -90,137 +119,188 @@ class _PhoneInputPageState extends State<PhoneInputPage> {
       Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (context) => SMSCodePage(phoneNumber: _phoneController.text),
+            builder: (context) => SmsCodePage(phoneNumber: phoneNumber),
         ),
       );
+      } else {
+        final errorMessage = result?['error'] ?? 'Ошибка при отправке кода';
+        CustomToast.show(
+          context,
+          message: errorMessage,
+          isSuccess: false,
+        );
+      }
+    } catch (e) {
+      CustomToast.show(
+        context,
+        message: 'Произошла ошибка при отправке кода',
+        isSuccess: false,
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () {
-        _focusNode.unfocus();
-      },
-      child: Scaffold(
-        backgroundColor: const Color(0xFF1A1A1A),
-        body: SafeArea(
-          child: Column(
-            children: [
-              // App Bar
-              Padding(
-                padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
-                child: Row(
-                  children: [
-                    IconButton(
-                      onPressed: () => Navigator.pop(context),
-                      icon: const Icon(Icons.arrow_back, color: Colors.white),
-                    ),
-                    Expanded(
-                      child: Center(
-                        child: Image.asset(
-                          'assets/img/logo.png',
-                          height: 24.h,
-                        ),
-                      ),
-                    ),
-                    SizedBox(width: 48.w), // Balance for back button
-                  ],
-                ),
-              ),
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final backgroundColor = Theme.of(context).scaffoldBackgroundColor;
+    final textColor = isDark ? Colors.white : Colors.black87;
+    final subtitleColor = isDark ? Colors.grey[400] : Colors.grey[600];
 
-              // Content
-              Expanded(
-                child: Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 16.w),
+    return Scaffold(
+      backgroundColor: backgroundColor,
+      appBar: AppBar(
+        backgroundColor: backgroundColor,
+        elevation: 0,
+        leading: IconButton(
+          icon: Icon(
+            Icons.arrow_back,
+            color: textColor,
+          ),
+                      onPressed: () => Navigator.pop(context),
+                    ),
+        title: Image.asset(
+                          'assets/img/logo.png',
+          height: 32.h,
+          fit: BoxFit.contain,
+                      ),
+        centerTitle: true,
+                ),
+      body: Padding(
+        padding: EdgeInsets.all(24.w),
                   child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
                       SizedBox(height: 40.h),
+            
+            // Title
                       Text(
                         'Введите номер телефона',
+              textAlign: TextAlign.center,
                         style: GoogleFonts.poppins(
-                          fontSize: 28.sp,
+                fontSize: 24.sp,
                           fontWeight: FontWeight.w600,
-                          color: Colors.white,
+                color: textColor,
                         ),
                       ),
+            
                       SizedBox(height: 8.h),
+            
+            // Subtitle
                       Text(
                         'Мы отправляем смс код',
+              textAlign: TextAlign.center,
                         style: GoogleFonts.poppins(
                           fontSize: 16.sp,
-                          color: Colors.grey[400],
+                color: subtitleColor,
                         ),
                       ),
+            
                       SizedBox(height: 40.h),
-                      Text(
+            
+            // Phone input label
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
                         'Номер телефона',
                         style: GoogleFonts.poppins(
                           fontSize: 14.sp,
-                          color: Colors.grey[400],
+                  fontWeight: FontWeight.w500,
+                  color: textColor,
+                ),
                         ),
                       ),
-                      SizedBox(height: 12.h),
+            
+            SizedBox(height: 8.h),
+            
+            // Phone input field
                       Container(
                         decoration: BoxDecoration(
-                          border: Border.all(color: Colors.white, width: 1),
+                border: Border.all(
+                  color: const Color(0xFF2196F3),
+                  width: 2,
+                ),
                           borderRadius: BorderRadius.circular(12.r),
                         ),
                         child: TextField(
                           controller: _phoneController,
-                          focusNode: _focusNode,
                           keyboardType: TextInputType.phone,
-                          inputFormatters: [
-                            FilteringTextInputFormatter.allow(RegExp(r'[\d\s\+]')),
-                          ],
                           style: GoogleFonts.poppins(
-                            fontSize: 16.sp,
-                            color: Colors.white,
+                  fontSize: 18.sp,
+                  fontWeight: FontWeight.w500,
+                  color: textColor,
                           ),
                           decoration: InputDecoration(
+                  hintText: '+998 91 999 99 99',
+                  hintStyle: GoogleFonts.poppins(
+                    fontSize: 18.sp,
+                    color: subtitleColor,
+                  ),
                             border: InputBorder.none,
                             contentPadding: EdgeInsets.symmetric(
                               horizontal: 16.w,
                               vertical: 16.h,
                             ),
                           ),
-                          onChanged: _onPhoneChanged,
+                inputFormatters: [
+                  TextInputFormatter.withFunction((oldValue, newValue) {
+                    final formatted = _formatPhoneNumber(newValue.text);
+                    return TextEditingValue(
+                      text: formatted,
+                      selection: TextSelection.collapsed(offset: formatted.length),
+                    );
+                  }),
+                ],
                         ),
                       ),
+            
                       const Spacer(),
+            
+            // Continue button
                       SizedBox(
                         width: double.infinity,
-                        height: 50.h,
+              height: 56.h,
                         child: ElevatedButton(
-                          onPressed: _isValidPhone() ? _onContinue : null,
+                onPressed: (_isButtonEnabled && !_isLoading) ? _onContinue : null,
                           style: ElevatedButton.styleFrom(
                             backgroundColor: const Color(0xFF2196F3),
-                            disabledBackgroundColor: Colors.grey[700],
+                  disabledBackgroundColor: isDark 
+                      ? const Color(0xFF2196F3).withOpacity(0.5)
+                      : Colors.grey[300],
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12.r),
                             ),
+                  elevation: 0,
                           ),
-                          child: Text(
+                child: _isLoading
+                    ? SizedBox(
+                        width: 20.w,
+                        height: 20.h,
+                        child: const CircularProgressIndicator(
+                          color: Colors.white,
+                          strokeWidth: 2,
+                        ),
+                      )
+                    : Text(
                             'Продолжить',
                             style: GoogleFonts.poppins(
                               fontSize: 16.sp,
                               fontWeight: FontWeight.w600,
-                              color: Colors.white,
-                            ),
-                          ),
-                        ),
-                      ),
-                      SizedBox(height: 20.h),
-                    ],
+                          color: (_isButtonEnabled && !_isLoading) ? Colors.white : Colors.grey[600],
                   ),
                 ),
               ),
+            ),
+            
+            SizedBox(height: 40.h),
             ],
-          ),
         ),
       ),
     );
   }
 }
-
