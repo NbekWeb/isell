@@ -89,17 +89,17 @@ class _SettingsPageState extends State<SettingsPage> {
     });
   }
 
-  Future<void> _toggleTheme() async {
-    // Force toggle between light and dark (ignore system)
-    final newTheme = _currentTheme == ThemeMode.dark ? ThemeMode.light : ThemeMode.dark;
-    
-    debugPrint('🎨 Theme toggle: ${_currentTheme} -> $newTheme');
-    
+  Future<void> _toggleTheme(bool isCurrentlyDark) async {
+    // Haqiqiy ekrandagi temaga qarab toggle qilamiz
+    final newTheme = isCurrentlyDark ? ThemeMode.light : ThemeMode.dark;
+
+    debugPrint('🎨 Theme toggle: ${isCurrentlyDark ? "dark" : "light"} -> $newTheme');
+
     await ThemeService.setThemeMode(newTheme);
     setState(() {
       _currentTheme = newTheme;
     });
-    
+
     if (widget.onThemeUpdate != null) {
       widget.onThemeUpdate!(newTheme);
       debugPrint('🎨 Theme update callback called');
@@ -358,16 +358,8 @@ class _SettingsPageState extends State<SettingsPage> {
 
   @override
   Widget build(BuildContext context) {
-    // Use _currentTheme to determine if dark mode is active
-    bool isDark;
-    if (_currentTheme == ThemeMode.dark) {
-      isDark = true;
-    } else if (_currentTheme == ThemeMode.light) {
-      isDark = false;
-    } else {
-      // System mode - use current theme brightness
-      isDark = Theme.of(context).brightness == Brightness.dark;
-    }
+    // Haqiqiy aktiv temani kontekstdan olamiz
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
     final containerColor = isDark ? const Color(0xFF2A2A2A) : Colors.white;
     final textColor = isDark ? Colors.white : Colors.black87;
     final subtitleColor = isDark ? (Colors.grey[400] ?? Colors.grey) : (Colors.grey[600] ?? Colors.grey);
@@ -634,7 +626,7 @@ class _SettingsPageState extends State<SettingsPage> {
             
             // Dark Theme Toggle
             GestureDetector(
-              onTap: _toggleTheme,
+              onTap: () => _toggleTheme(isDark),
               child: Container(
                 padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
                 decoration: BoxDecoration(
@@ -663,7 +655,9 @@ class _SettingsPageState extends State<SettingsPage> {
                     // Text centered
                     Center(
                       child: Text(
-                        _currentTheme == ThemeMode.dark ? 'Тёмная тема' : 'Светлая тема',
+                        // Matnni real aktiv tema holatiga qarab ko'rsatamiz
+                        // (ThemeMode.system bo'lganda ham to'g'ri ishlashi uchun)
+                        isDark ? 'Тёмная тема' : 'Светлая тема',
                         style: GoogleFonts.poppins(
                           fontSize: 16.sp,
                           fontWeight: FontWeight.w500,

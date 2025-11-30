@@ -4,6 +4,7 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'screens/splash_screen.dart';
 import 'components/main_layout.dart';
+import 'pages/order_address_page.dart';
 import 'services/theme_service.dart';
 import 'services/api_service.dart';
 
@@ -12,7 +13,6 @@ void main() async {
   
   // Initialize API Service with interceptors
   ApiService.init();
-  print('✅ ApiService initialized with interceptors');
   
   // Initialize Yandex MapKit with API key
   // API key is configured in AndroidManifest.xml and Info.plist
@@ -128,6 +128,7 @@ class _ISellAppState extends State<ISellApp> {
           home: SplashScreen(onThemeUpdate: _updateTheme),
           routes: {
             '/home': (context) => MainLayout(onThemeUpdate: _updateTheme),
+            '/order-address': (context) => const OrderAddressPage(),
           },
         );
       },

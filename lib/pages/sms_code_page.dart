@@ -3,11 +3,11 @@ import 'package:flutter/services.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../services/auth_service.dart';
 import '../services/myid_service.dart';
 import '../services/user_service.dart';
 import '../widgets/custom_toast.dart';
-import '../components/main_layout.dart';
 
 class SmsCodePage extends StatefulWidget {
   final String phoneNumber;
@@ -128,9 +128,9 @@ class _SmsCodePageState extends State<SmsCodePage> {
             isSuccess: true,
           );
 
-          // Navigate to main layout and clear navigation stack
-          Navigator.of(context).pushAndRemoveUntil(
-            MaterialPageRoute(builder: (context) => const MainLayout()),
+          // Navigate to main layout (named route so theme callback works)
+          Navigator.of(context).pushNamedAndRemoveUntil(
+            '/home',
             (route) => false,
           );
         }
@@ -212,14 +212,39 @@ class _SmsCodePageState extends State<SmsCodePage> {
 
   Future<void> _startMyIdVerification() async {
     try {
-      print('🔵 Starting MyID verification process...');
+      // Step 1: Check camera permission first
+      final cameraStatus = await Permission.camera.status;
       
-      // Step 1: Get session ID from MyID API
+      if (!cameraStatus.isGranted) {
+        // Request camera permission
+        final requestResult = await Permission.camera.request();
+        
+        if (!requestResult.isGranted) {
+          // Permission denied - SMS is correct but camera permission not granted
+          // Navigate to home page instead of staying on SMS page
+          CustomToast.show(
+            context,
+            message: 'Камера разрешение требуется для MyID. Переход на главную страницу...',
+            isSuccess: false,
+          );
+          
+          // Navigate to home page
+          if (mounted) {
+            Navigator.of(context).pushNamedAndRemoveUntil(
+              '/home',
+              (route) => false,
+            );
+          }
+          return;
+        }
+      }
+      
+      // Step 2: Get session ID from MyID API
       String sessionId = await MyIdService.getSessionId();
-      print('✅ Session ID obtained: $sessionId');
 
-      // Step 2: Start MyID SDK with session_id
-      print('🚀 Starting MyID SDK with session ID: $sessionId');
+      // Step 3: Start MyID SDK authentication
+      // Add a small delay to ensure permission is fully processed
+      await Future.delayed(const Duration(milliseconds: 300));
       
       final result = await MyIdService.startAuthentication(
         sessionId: sessionId,
@@ -230,12 +255,10 @@ class _SmsCodePageState extends State<SmsCodePage> {
         locale: 'russian',
       );
 
-      // Step 3: Handle MyID SDK result
+      // Step 4: Handle MyID SDK result
       if (result.code != null) {
-        print('✅ MyID SDK - Authentication successful');
-        print('📋 Code received: ${result.code}');
         
-        // Step 4: Call backend MyID verify API
+        // Step 5: Call backend MyID verify API
         await _verifyMyIdWithBackend(result.code!, result.image, result.comparisonValue);
         
       } else {
@@ -245,25 +268,107 @@ class _SmsCodePageState extends State<SmsCodePage> {
           isSuccess: false,
         );
       }
+    } on MyIdException catch (e) {
+      // Handle specific MyID exceptions
+      if (e.code == 'CAMERA_PERMISSION_DENIED') {
+        // Camera permission was denied during SDK start
+        // Check if we can request it again
+        final cameraStatus = await Permission.camera.status;
+        
+        if (cameraStatus.isPermanentlyDenied) {
+          // Permission permanently denied - go to home page
+          CustomToast.show(
+            context,
+            message: 'Камера разрешение требуется. Переход на главную страницу...',
+            isSuccess: false,
+          );
+          
+          if (mounted) {
+            Navigator.of(context).pushNamedAndRemoveUntil(
+              '/home',
+              (route) => false,
+            );
+          }
+        } else {
+          // Permission can be requested - wait a bit and retry
+          CustomToast.show(
+            context,
+            message: 'Запрос разрешения камеры...',
+            isSuccess: true,
+          );
+          
+          // Wait for permission to be granted and retry
+          await Future.delayed(const Duration(milliseconds: 500));
+          await _startMyIdVerification();
+        }
+      } else {
+        CustomToast.show(
+          context,
+          message: 'Ошибка MyID верификации: ${e.message}',
+          isSuccess: false,
+        );
+      }
     } catch (e) {
-      print('❌ Error in MyID verification: $e');
+      // Check if it's a PlatformException with CAMERA_PERMISSION_DENIED
+      if (e is PlatformException && e.code == 'CAMERA_PERMISSION_DENIED') {
+        // Wait a bit for permission to be processed, then retry
+        CustomToast.show(
+          context,
+          message: 'Ожидание разрешения камеры...',
+          isSuccess: true,
+        );
+        
+        await Future.delayed(const Duration(milliseconds: 500));
+        
+        // Check permission status and retry
+        final cameraStatus = await Permission.camera.status;
+        if (cameraStatus.isGranted) {
+          // Permission granted, retry
+          await _startMyIdVerification();
+        } else if (cameraStatus.isPermanentlyDenied) {
+          // Permission permanently denied - go to home page
+          CustomToast.show(
+            context,
+            message: 'Камера разрешение требуется. Переход на главную страницу...',
+            isSuccess: false,
+          );
+          
+          if (mounted) {
+            Navigator.of(context).pushNamedAndRemoveUntil(
+              '/home',
+              (route) => false,
+            );
+          }
+        } else {
+          // Try requesting again
+          final requestResult = await Permission.camera.request();
+          if (requestResult.isGranted) {
+            await _startMyIdVerification();
+          } else {
+            // Still denied - go to home page
+            if (mounted) {
+              Navigator.of(context).pushNamedAndRemoveUntil(
+                '/home',
+                (route) => false,
+              );
+            }
+          }
+        }
+      } else {
       CustomToast.show(
         context,
         message: 'Ошибка MyID верификации: ${e.toString()}',
         isSuccess: false,
       );
+      }
     }
   }
 
   Future<void> _verifyMyIdWithBackend(String code, String? image, double? comparisonValue) async {
     try {
-      print('🔵 Calling backend MyID verify API...');
-      print('📤 Code: $code');
-      print('📤 Phone: ${widget.phoneNumber}');
       
       // Get access token for the API call
       final accessToken = await MyIdService.getAccessToken();
-      print('🔑 Access token obtained for API call');
       
       // Call the MyID verify endpoint
       final response = await MyIdService.verifyMyIdWithBackend(
@@ -272,8 +377,6 @@ class _SmsCodePageState extends State<SmsCodePage> {
         phoneNumber: widget.phoneNumber,
       );
       
-      print('🔵 MyID Verify API Response: $response');
-      print('📋 Response Data: ${response?['data']}');
       
       if (response != null && response['success'] == true) {
         // Success - save tokens and user data
@@ -285,9 +388,9 @@ class _SmsCodePageState extends State<SmsCodePage> {
           isSuccess: true,
         );
         
-        // Navigate to main layout (with bottom navigation)
-        Navigator.of(context).pushAndRemoveUntil(
-          MaterialPageRoute(builder: (context) => const MainLayout()),
+        // Navigate to main layout (with bottom navigation, using named route)
+        Navigator.of(context).pushNamedAndRemoveUntil(
+          '/home',
           (route) => false,
         );
       } else {

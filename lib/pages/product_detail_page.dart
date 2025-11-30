@@ -10,15 +10,11 @@ import '../components/product_detail_sections.dart';
 import '../services/product_services.dart';
 import '../services/cart_service.dart';
 import '../widgets/custom_toast.dart';
-import '../components/main_layout.dart';
 
 class ProductDetailPage extends StatefulWidget {
   final Map<String, dynamic> product;
 
-  const ProductDetailPage({
-    super.key,
-    required this.product,
-  });
+  const ProductDetailPage({super.key, required this.product});
 
   @override
   State<ProductDetailPage> createState() => _ProductDetailPageState();
@@ -38,21 +34,16 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
   List<Map<String, dynamic>> _simOptions = [];
   List<Map<String, dynamic>> _tariffs = [];
   String? _selectedTariffId;
-  final GlobalKey _selectKey = GlobalKey();
   int? _productId;
   int _cartQuantity = 0;
   String? _cartUniqueId;
   Timer? _calculateDebounce;
-  String? _calculatedMonthlyText;
-  bool _isCalculating = false;
-
 
   @override
   void initState() {
     super.initState();
     _currentProduct = Map<String, dynamic>.from(widget.product);
     _productId = _parseProductId(_currentProduct['product_id']);
-    
     
     _hydrateOptions(fromApi: false);
     _loadProductIdAndFilter();
@@ -100,9 +91,9 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
           final originalProductId = _currentProduct['product_id'];
           final resultProductId = result['product_id'] ?? result['id'];
           
-          
           // Only update if the API returned data for the correct product
-          if (originalProductId != null && resultProductId != null && 
+          if (originalProductId != null &&
+              resultProductId != null &&
               originalProductId.toString() == resultProductId.toString()) {
             _currentProduct = Map<String, dynamic>.from(result);
             _currentProduct['product_id'] = originalProductId;
@@ -145,13 +136,16 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
             // Try to find "No installment" first (most likely to work)
             try {
               defaultTariff = _tariffs.firstWhere(
-                (t) => t['name'] == 'No installment' || t['payments_count'] == 0,
+                (t) =>
+                    t['name'] == 'No installment' || t['payments_count'] == 0,
               );
             } catch (e) {
               // Not found, try simple monthly tariffs without offset days
               try {
                 defaultTariff = _tariffs.firstWhere(
-                  (t) => t['payments_count'] == 1 && (t['offset_days'] == null || t['offset_days'] == 0),
+                  (t) =>
+                      t['payments_count'] == 1 &&
+                      (t['offset_days'] == null || t['offset_days'] == 0),
             );
               } catch (e) {
                 // If still not found, use the last tariff (likely to be "No installment")
@@ -160,7 +154,7 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
             }
             
             _selectedTariffId = defaultTariff['id'].toString();
-            print('🔵 Selected default tariff: ${defaultTariff['name']} (ID: ${defaultTariff['id']})');
+          
           }
         });
         
@@ -190,51 +184,17 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
       return;
     }
 
-    // Show loading state
-    if (mounted) {
-      setState(() {
-        _isCalculating = true;
-      });
-    }
-
     try {
       final variationId = _getCurrentVariationId();
       
-      
-      final result = await ProductServices.calculateMonthlyPayment(
+      await ProductServices.calculateMonthlyPayment(
         productId: productId,
         advancePayment: downPayment,
         tariffId: tariffId,
         variationId: variationId,
       );
-
-      if (result != null && mounted) {
-        setState(() {
-          // Handle new API response structure
-          dynamic monthlyPayment;
-          
-          if (result is List && result.isNotEmpty) {
-            final resultList = result as List;
-            final firstResult = resultList.first;
-            if (firstResult is Map<String, dynamic>) {
-              monthlyPayment = firstResult['monthly_payment'];
-            }
-          } else if (result is Map<String, dynamic>) {
-            final resultMap = result as Map<String, dynamic>;
-            monthlyPayment = resultMap['monthly_payment'];
-          }
-          
-          _calculatedMonthlyText = monthlyPayment?.toString();
-          _isCalculating = false;
-        });
-      }
     } catch (e) {
       print('❌ Error calculating monthly payment: $e');
-      if (mounted) {
-        setState(() {
-          _isCalculating = false;
-        });
-      }
     }
   }
 
@@ -275,7 +235,9 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
     }
 
     final newQuantity = _extractQuantityFromItem(matchedItem);
-    final newUniqueId = matchedItem != null ? matchedItem['uniqueId']?.toString() : null;
+    final newUniqueId = matchedItem != null
+        ? matchedItem['uniqueId']?.toString()
+        : null;
 
     if (!mounted) return;
 
@@ -317,7 +279,9 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
 
   void _hydrateOptions({bool fromApi = true}) {
     final previousColorOptions = List<Map<String, dynamic>>.from(_colorOptions);
-    final previousStorageOptions = List<Map<String, dynamic>>.from(_storageOptions);
+    final previousStorageOptions = List<Map<String, dynamic>>.from(
+      _storageOptions,
+    );
     final previousSimOptions = List<Map<String, dynamic>>.from(_simOptions);
 
     _colorOptions = _extractOptionList(_currentProduct, 'color_list');
@@ -327,7 +291,9 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
     if (fromApi && _colorOptions.isEmpty && previousColorOptions.isNotEmpty) {
       _colorOptions = previousColorOptions;
     }
-    if (fromApi && _storageOptions.isEmpty && previousStorageOptions.isNotEmpty) {
+    if (fromApi &&
+        _storageOptions.isEmpty &&
+        previousStorageOptions.isNotEmpty) {
       _storageOptions = previousStorageOptions;
     }
     if (fromApi && _simOptions.isEmpty && previousSimOptions.isNotEmpty) {
@@ -335,25 +301,48 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
     }
 
     if (fromApi) {
-      selectedColor = _getInitialSelection(_colorOptions, 'color_name', fallback: selectedColor);
-      selectedStorage = _getInitialSelection(_storageOptions, 'storage_name', fallback: selectedStorage);
-      selectedSimCard = _getInitialSelection(_simOptions, 'sim_card_name', fallback: selectedSimCard);
+      selectedColor = _getInitialSelection(
+        _colorOptions,
+        'color_name',
+        fallback: selectedColor,
+      );
+      selectedStorage = _getInitialSelection(
+        _storageOptions,
+        'storage_name',
+        fallback: selectedStorage,
+      );
+      selectedSimCard = _getInitialSelection(
+        _simOptions,
+        'sim_card_name',
+        fallback: selectedSimCard,
+      );
     } else {
       // For initial load, use default variation parameters
       final defaultParams = _getDefaultVariationParams();
-      selectedColor = defaultParams['color'] ?? _getInitialSelection(_colorOptions, 'color_name');
-      selectedStorage = defaultParams['storage'] ?? _getInitialSelection(_storageOptions, 'storage_name');
-      selectedSimCard = defaultParams['sim'] ?? _getInitialSelection(_simOptions, 'sim_card_name');
+      selectedColor =
+          defaultParams['color'] ??
+          _getInitialSelection(_colorOptions, 'color_name');
+      selectedStorage =
+          defaultParams['storage'] ??
+          _getInitialSelection(_storageOptions, 'storage_name');
+      selectedSimCard =
+          defaultParams['sim'] ??
+          _getInitialSelection(_simOptions, 'sim_card_name');
     }
 
     _markActiveOptions(_colorOptions, 'color_name', selectedColor);
     _markActiveOptions(_storageOptions, 'storage_name', selectedStorage);
     _markActiveOptions(_simOptions, 'sim_card_name', selectedSimCard);
 
-    debugPrint('Options - Color: ${_colorOptions.length}, Storage: ${_storageOptions.length}, SIM: ${_simOptions.length}');
+    debugPrint(
+      'Options - Color: ${_colorOptions.length}, Storage: ${_storageOptions.length}, SIM: ${_simOptions.length}',
+    );
   }
 
-  List<Map<String, dynamic>> _extractOptionList(Map<String, dynamic> product, String key) {
+  List<Map<String, dynamic>> _extractOptionList(
+    Map<String, dynamic> product,
+    String key,
+  ) {
     // First check the new structure under filter_options
     final filterOptions = product['filter_options'];
     if (filterOptions is Map<String, dynamic>) {
@@ -377,7 +366,11 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
     return [];
   }
 
-  String? _getInitialSelection(List<Map<String, dynamic>> options, String key, {String? fallback}) {
+  String? _getInitialSelection(
+    List<Map<String, dynamic>> options,
+    String key, {
+    String? fallback,
+  }) {
     if (options.isEmpty) return fallback;
 
     if (fallback != null && fallback.isNotEmpty) {
@@ -397,7 +390,11 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
     return fallback ?? options.first[key]?.toString();
   }
 
-  void _markActiveOptions(List<Map<String, dynamic>> options, String key, String? selected) {
+  void _markActiveOptions(
+    List<Map<String, dynamic>> options,
+    String key,
+    String? selected,
+  ) {
     for (final option in options) {
       option['is_active'] = option[key]?.toString() == selected;
     }
@@ -485,19 +482,10 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
   Future<void> _navigateToCart() async {
     if (!mounted) return;
     
-    // Navigate back to MainLayout with cart index
-    Navigator.of(context).popUntil((route) {
-      return route.isFirst || route.settings.name == '/home';
-    });
-    
-    // Navigate to MainLayout with cart index
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(
-        builder: (context) => MainLayout(
-          onThemeUpdate: null,
-          initialIndex: 2, // Cart page index
-        ),
-      ),
+    // Navigate to MainLayout (named route) and open Cart tab (index 2)
+    Navigator.of(context).pushReplacementNamed(
+      '/home',
+      arguments: 2, // Cart page index
     );
     
     if (!mounted) return;
@@ -554,10 +542,13 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
 
     final newQuantity = _cartQuantity + delta;
     
-    debugPrint('🔍 _changeCartQuantity: isUsed=$isUsed, currentQuantity=$_cartQuantity, delta=$delta, newQuantity=$newQuantity');
+    debugPrint(
+      '🔍 _changeCartQuantity: isUsed=$isUsed, currentQuantity=$_cartQuantity, delta=$delta, newQuantity=$newQuantity',
+    );
     
     // Ishlatilgan mahsulotlar uchun miqdorni 1 ga cheklash
-    if (isUsed && newQuantity > 1) {
+    // Agar miqdor allaqachon 1 bo'lsa va + bosilsa, toast ko'rsatish
+    if (isUsed && _cartQuantity >= 1 && delta > 0) {
       if (!mounted) return;
       CustomToast.show(
         context,
@@ -619,9 +610,7 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
             ),
             _buildQuantityControlButton(
               icon: Icons.add,
-              onTap: _isUsedProduct(_currentProduct) && _cartQuantity >= 1 
-                  ? null // Ishlatilgan mahsulot uchun o'chirish
-                  : () => _changeCartQuantity(1),
+              onTap: () => _changeCartQuantity(1),
             ),
           ],
         ),
@@ -641,11 +630,7 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
         child: InkWell(
           onTap: onTap,
           child: Center(
-            child: Icon(
-              icon,
-              color: Colors.white,
-              size: 24.w,
-            ),
+            child: Icon(icon, color: Colors.white, size: 24.w),
           ),
         ),
       ),
@@ -658,10 +643,7 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          SizedBox(
-            height: 50.h,
-            child: _buildQuantitySelector(),
-          ),
+          SizedBox(height: 50.h, child: _buildQuantitySelector()),
           SizedBox(height: 12.h),
           SizedBox(
             height: 48.h,
@@ -728,11 +710,17 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final backgroundColor = isDark ? const Color(0xFF1A1A1A) : const Color(0xFFEBEBEB);
-    final fallbackBgColor = isDark ? const Color(0xFF222222) : const Color.fromRGBO(255, 255, 255, 1);
+    final backgroundColor = isDark
+        ? const Color(0xFF1A1A1A)
+        : const Color(0xFFEBEBEB);
+    final fallbackBgColor = isDark
+        ? const Color(0xFF222222)
+        : const Color.fromRGBO(255, 255, 255, 1);
     final fallbackTextColor = isDark ? Colors.white : Colors.black87;
     final textColor = isDark ? Colors.white : Colors.black87;
-    final subtitleColor = isDark ? (Colors.grey[400] ?? Colors.grey) : (Colors.grey[600] ?? Colors.grey);
+    final subtitleColor = isDark
+        ? (Colors.grey[400] ?? Colors.grey)
+        : (Colors.grey[600] ?? Colors.grey);
     final borderColor = isDark ? Colors.white : Colors.black87;
     final sectionBackground = isDark ? const Color(0xFF222222) : Colors.white;
     final bottomBarColor = sectionBackground;
@@ -754,7 +742,10 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
                       padding: EdgeInsets.all(16),
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(20),
-                            child: _buildProductImage(fallbackBgColor, fallbackTextColor),
+                            child: _buildProductImage(
+                              fallbackBgColor,
+                              fallbackTextColor,
+                            ),
                           ),
                         ),
                     Padding(
@@ -772,19 +763,26 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
                           ),
                           SizedBox(height: 5),
                           Text(
-                                _formatPriceValue(_getProductPrice(_currentProduct)),
+                                _formatPriceValue(
+                                  _getProductPrice(_currentProduct),
+                                ),
                             style: GoogleFonts.poppins(
                               fontSize: 24,
                               fontWeight: FontWeight.w600,
                               color: textColor,
                             ),
                           ),
-                          if (_colorOptions.isNotEmpty || _storageOptions.isNotEmpty || _simOptions.isNotEmpty) ...[
+                              if (_colorOptions.isNotEmpty ||
+                                  _storageOptions.isNotEmpty ||
+                                  _simOptions.isNotEmpty) ...[
                           SizedBox(height: 24.h),
-                          ProductSectionCard(
+                                Container(
+                                  margin: EdgeInsets.only(bottom: 24.h),
+                                  child: ProductSectionCard(
                             backgroundColor: sectionBackground,
                             child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
                               children: [
                                   if (_colorOptions.isNotEmpty) ...[
                                 ProductOptionSection(
@@ -793,7 +791,8 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
                                     _colorOptions,
                                     'color_name',
                                   ),
-                                  emptyMessage: 'Нет доступных цветов',
+                                            emptyMessage:
+                                                'Нет доступных цветов',
                                   onOptionTap: _onColorChanged,
                                   textColor: textColor,
                                   borderColor: borderColor,
@@ -808,7 +807,8 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
                                     _storageOptions,
                                     'storage_name',
                                   ),
-                                  emptyMessage: 'Нет доступных вариантов памяти',
+                                            emptyMessage:
+                                                'Нет доступных вариантов памяти',
                                   onOptionTap: _onStorageChanged,
                                   textColor: textColor,
                                   borderColor: borderColor,
@@ -823,7 +823,8 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
                                       _simOptions,
                                       'sim_card_name',
                                     ),
-                                        emptyMessage: 'Нет доступных вариантов SIM-карт',
+                                            emptyMessage:
+                                                'Нет доступных вариантов SIM-карт',
                                     onOptionTap: _onSimChanged,
                                     textColor: textColor,
                                     borderColor: borderColor,
@@ -831,11 +832,11 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
                                   ),
                                 ],
                               ],
+                                    ),
                             ),
                           ),
                           ],
                           if (_buildSpecificationItems().isNotEmpty) ...[
-                          SizedBox(height: 24.h),
                           ProductSpecificationsSection(
                             title: 'Характеристики',
                             items: _buildSpecificationItems(),
@@ -843,27 +844,8 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
                             subtitleColor: subtitleColor,
                             backgroundColor: sectionBackground,
                           ),
-                          ],
                           SizedBox(height: 24.h),
-                          ProductFinancialSection(
-                            backgroundColor: sectionBackground,
-                            borderColor: borderColor,
-                            textColor: textColor,
-                            subtitleColor: subtitleColor,
-                            downPayment: downPayment,
-                            maxDownPayment: (_parseNumericValue(_getProductPrice(_currentProduct)) ?? 0).toInt(),
-                            onDownPaymentChanged: (value) {
-                              setState(() {
-                                downPayment = value;
-                              });
-                              _calculateMonthlyPaymentWithDebounce();
-                            },
-                                note: 'Будет распределен между товарами пропорционально их стоимости',
-                                installmentSelector: _buildInstallmentPeriod(textColor, borderColor),
-                                totalPrice: '', // Hide price
-                            monthlyText: _formatMonthlyPayment(),
-                          ),
-                          SizedBox(height: 20),
+                              ],
                         ],
                       ),
                     ),
@@ -872,14 +854,12 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
               ),
             ),
             Container(
-              padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
-              decoration: BoxDecoration(
-                color: bottomBarColor,
-              ),
-              child: SafeArea(
-                top: false,
-                    child: _buildBottomAction(),
+                  padding: EdgeInsets.symmetric(
+                    horizontal: 16.w,
+                    vertical: 12.h,
                   ),
+                  decoration: BoxDecoration(color: bottomBarColor),
+                  child: SafeArea(top: false, child: _buildBottomAction()),
                 ),
               ],
             ),
@@ -887,195 +867,12 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
               Container(
                 color: Colors.black.withOpacity(0.3),
                 child: const Center(
-                  child: CircularProgressIndicator(
-                    color: Color(0xFF1B7EFF),
-                ),
+                  child: CircularProgressIndicator(color: Color(0xFF1B7EFF)),
               ),
             ),
           ],
         ),
       ),
-    );
-  }
-
-  Widget _buildInstallmentPeriod(Color textColor, Color borderColor) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final containerColor = isDark ? const Color(0xFF2A2A2A) : Colors.white;
-    
-    return GestureDetector(
-      onTap: () {
-        _showSelectModal();
-      },
-      child: Container(
-        key: _selectKey,
-        width: double.infinity,
-      decoration: BoxDecoration(
-        color: containerColor,
-        border: Border.all(color: borderColor, width: 1),
-        borderRadius: BorderRadius.circular(12.r),
-      ),
-        padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 16.h),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text(
-              _getSelectedTariffName(),
-              style: GoogleFonts.poppins(
-                fontSize: 16.sp,
-                color: textColor,
-                decoration: TextDecoration.none,
-              ),
-            ),
-            Icon(
-              Icons.keyboard_arrow_down,
-              color: textColor,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _showSelectModal() {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final modalColor = isDark ? const Color(0xFF2A2A2A) : Colors.white;
-    final optionTextColor = isDark ? Colors.white : Colors.black87;
-    final screenHeight = MediaQuery.of(context).size.height;
-    final screenWidth = MediaQuery.of(context).size.width;
-
-    showDialog(
-      context: context,
-      barrierColor: Colors.black.withOpacity(0.5),
-      builder: (BuildContext dialogContext) {
-        return GestureDetector(
-          onTap: () {
-            Navigator.of(dialogContext).pop();
-          },
-          child: Scaffold(
-            backgroundColor: Colors.transparent,
-            body: Center(
-              child: GestureDetector(
-                onTap: () {}, // Prevent closing when tapping inside modal
-                child: Container(
-                  width: screenWidth * 0.8, // 80% width
-                  constraints: BoxConstraints(
-                    maxHeight: screenHeight * 0.7, // 70vh max height
-                  ),
-                  decoration: BoxDecoration(
-                    color: modalColor,
-                    borderRadius: BorderRadius.circular(16.r),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.25),
-                        blurRadius: 20,
-                        offset: Offset(0, 8),
-                      ),
-                    ],
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      // Header
-                      Container(
-                        padding: EdgeInsets.all(20.w),
-                        decoration: BoxDecoration(
-                          border: Border(
-                            bottom: BorderSide(
-                              color: isDark ? Colors.grey[600]! : Colors.grey[300]!,
-                              width: 1,
-                            ),
-                          ),
-                        ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(
-                              'Срок рассрочки',
-                              style: GoogleFonts.poppins(
-                                fontSize: 18.sp,
-                                fontWeight: FontWeight.w600,
-                                color: optionTextColor,
-                              ),
-                            ),
-                            GestureDetector(
-                              onTap: () => Navigator.of(dialogContext).pop(),
-                              child: Icon(
-                                Icons.close,
-                                color: optionTextColor,
-                                size: 24.w,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      
-                      // Scrollable tariff list
-                      Flexible(
-                        child: SingleChildScrollView(
-                          child: Column(
-                            children: _tariffs.map((tariff) {
-                              final tariffId = tariff['id'].toString();
-                              final isSelected = _selectedTariffId == tariffId;
-                              
-                              return GestureDetector(
-                                onTap: () {
-                                  setState(() {
-                                    _selectedTariffId = tariffId;
-                                  });
-                                  Navigator.of(dialogContext).pop();
-                                  _calculateMonthlyPaymentWithDebounce();
-                                },
-                                child: Container(
-                                  width: double.infinity,
-                                  padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 16.h),
-                                  decoration: BoxDecoration(
-                                    color: isSelected 
-                                        ? (isDark ? Colors.green.withOpacity(0.1) : Colors.green.withOpacity(0.05))
-                                        : Colors.transparent,
-                                    border: Border(
-                                      bottom: tariff != _tariffs.last
-                                          ? BorderSide(
-                                              color: isDark ? Colors.grey[700]! : Colors.grey[200]!,
-                                              width: 0.5,
-                                            )
-                                          : BorderSide.none,
-                                    ),
-                                  ),
-                                  child: Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                    children: [
-                                      Expanded(
-                                        child: Text(
-                                          _formatTariffName(tariff),
-                                          style: GoogleFonts.poppins(
-                                            fontSize: 16.sp,
-                                            fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-                                            color: isSelected ? Colors.green : optionTextColor,
-                                          ),
-                                        ),
-                                      ),
-                                      if (isSelected)
-                                        Icon(
-                                          Icons.check_circle,
-                                          color: Colors.green,
-                                          size: 24.w,
-                                        ),
-                                    ],
-                                  ),
-                                ),
-                              );
-                            }).toList(),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
-      },
     );
   }
 
@@ -1084,7 +881,8 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
     
     // If no variation images found, fallback to product level image
     if (imageUrls.isEmpty) {
-      if (_currentProduct['image'] is String && _currentProduct['image'].isNotEmpty) {
+      if (_currentProduct['image'] is String &&
+          _currentProduct['image'].isNotEmpty) {
         imageUrls.add(_currentProduct['image'] as String);
       }
     }
@@ -1093,13 +891,16 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
     if (imageUrls.isEmpty) {
       final images = _currentProduct['images'];
       if (images is List && images.isNotEmpty) {
-        imageUrls = images.map<String>((img) {
+        imageUrls = images
+            .map<String>((img) {
           if (img is Map && img['image'] is String) {
             return img['image'] as String;
           }
           if (img is String) return img;
           return '';
-        }).where((url) => url.isNotEmpty).toList();
+            })
+            .where((url) => url.isNotEmpty)
+            .toList();
       } else if (images is String && images.isNotEmpty) {
         imageUrls = [images];
       }
@@ -1189,10 +990,12 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
     String key,
   ) {
     return options
-        .map((option) => ProductOptionViewData(
+        .map(
+          (option) => ProductOptionViewData(
               label: option[key]?.toString() ?? '',
               isSelected: option['is_active'] == true,
-            ))
+          ),
+        )
         .where((option) => option.label.isNotEmpty)
         .toList();
   }
@@ -1219,10 +1022,7 @@ class _ProductDetailPageState extends State<ProductDetailPage> {
           // Faqat qiymati bo'lgan xususiyatlarni qaytarish
           if (value.isEmpty || value == '-') return null;
 
-          return SpecificationItem(
-            name: name,
-            value: value,
-          );
+          return SpecificationItem(name: name, value: value);
         })
         .whereType<SpecificationItem>()
         .toList();
@@ -1246,8 +1046,9 @@ double? _parseNumericValue(dynamic value) {
 
   String _formatUsdAmount(double usdValue) {
     final isWhole = usdValue == usdValue.roundToDouble();
-    final formattedValue =
-        isWhole ? usdValue.round().toString() : usdValue.toStringAsFixed(2);
+    final formattedValue = isWhole
+        ? usdValue.round().toString()
+        : usdValue.toStringAsFixed(2);
     final parts = formattedValue.split('.');
     final integerPart = parts[0];
     final decimalPart = parts.length > 1 ? parts[1] : null;
@@ -1269,24 +1070,10 @@ double? _parseNumericValue(dynamic value) {
     return _formatUsdAmount(amount);
   }
 
-  String _formatMonthlyPayment() {
-    if (_isCalculating) {
-      return 'Рассчитываем...';
-    }
-    
-    if (_calculatedMonthlyText != null) {
-      final monthlyAmount = _parseNumericValue(_calculatedMonthlyText);
-      if (monthlyAmount != null && monthlyAmount > 0) {
-        return 'В рассрочку \$${monthlyAmount.toInt()} в мес';
-      }
-    }
-    
-    return 'В рассрочку';
-  }
-
   String? _resolvePrimaryImage() {
     // Check direct image field first (new structure)
-    if (_currentProduct['image'] is String && _currentProduct['image'].isNotEmpty) {
+    if (_currentProduct['image'] is String &&
+        _currentProduct['image'].isNotEmpty) {
       return _currentProduct['image'] as String;
     }
 
@@ -1304,14 +1091,18 @@ double? _parseNumericValue(dynamic value) {
     final images = _currentProduct['images'];
     if (images is List && images.isNotEmpty) {
       for (final image in images) {
-        if (image is Map && image['image'] is String && (image['image'] as String).isNotEmpty) {
+        if (image is Map &&
+            image['image'] is String &&
+            (image['image'] as String).isNotEmpty) {
           return image['image'] as String;
         }
         if (image is String && image.isNotEmpty) {
           return image;
         }
       }
-    } else if (images is Map && images['image'] is String && (images['image'] as String).isNotEmpty) {
+    } else if (images is Map &&
+        images['image'] is String &&
+        (images['image'] as String).isNotEmpty) {
       return images['image'] as String;
     } else if (images is String && images.isNotEmpty) {
       return images;
@@ -1320,8 +1111,7 @@ double? _parseNumericValue(dynamic value) {
   }
 
   String _getProductName(Map<String, dynamic> product) {
-    return 
-           product['product_name']?.toString() ?? 
+    return product['product_name']?.toString() ??
            product['name']?.toString() ?? 
            'Название продукта';
   }
@@ -1332,7 +1122,9 @@ double? _parseNumericValue(dynamic value) {
     // used: 2 = yangi
     final used = product['used'];
     final isUsed = used == 1;
-    debugPrint('🔍 _isUsedProduct: used=$used, isUsed=$isUsed, productName=${_getProductName(product)}');
+    debugPrint(
+      '🔍 _isUsedProduct: used=$used, isUsed=$isUsed, productName=${_getProductName(product)}',
+    );
     return isUsed;
   }
 
@@ -1367,65 +1159,6 @@ double? _parseNumericValue(dynamic value) {
     return 0;
   }
 
-  String _getSelectedTariffName() {
-    if (_selectedTariffId == null || _tariffs.isEmpty) {
-      return 'Выберите срок'; // fallback
-    }
-    
-    final selectedTariff = _tariffs.firstWhere(
-      (t) => t['id'].toString() == _selectedTariffId,
-      orElse: () => _tariffs.first,
-    );
-    
-    return _formatTariffName(selectedTariff);
-  }
-
-  String _formatTariffName(Map<String, dynamic> tariff) {
-    final name = tariff['name']?.toString() ?? '';
-    final paymentsCount = tariff['payments_count'] as int? ?? 0;
-    final offsetDays = tariff['offset_days'] as int? ?? 0;
-    
-    // Handle special cases
-    if (name == 'No installment' || paymentsCount == 0) {
-      return 'Без рассрочки';
-    }
-    
-    // Handle days-only installments (like 15d) - must be exactly "15d", not contain it
-    if (name == '15d' || (paymentsCount == 1 && offsetDays == -15)) {
-      return '15 дней';
-    }
-    
-    // Handle monthly payments with offset days
-    if (paymentsCount > 0) {
-      String result = '${paymentsCount} мес';
-      
-      // Add offset days if present
-      if (offsetDays > 0) {
-        result += ' (+${offsetDays}д)';
-      } else if (offsetDays < 0) {
-        result += ' (${offsetDays}д)';
-      }
-      
-      return result;
-    }
-    
-    // Fallback to original name
-    return name;
-  }
-
-  double _getSelectedTariffCoefficient() {
-    if (_selectedTariffId == null || _tariffs.isEmpty) {
-      return 1.081; // 1 month coefficient as fallback
-    }
-    
-    final selectedTariff = _tariffs.firstWhere(
-      (t) => t['id'].toString() == _selectedTariffId,
-      orElse: () => _tariffs.first,
-    );
-    
-    return (selectedTariff['coefficient'] as num?)?.toDouble() ?? 1.0;
-  }
-
   int? _getCurrentVariationId() {
     final currentVariation = _findCurrentVariation();
     if (currentVariation == null) {
@@ -1450,11 +1183,12 @@ double? _parseNumericValue(dynamic value) {
 
     // Find current selected variation
     final currentVariation = _findCurrentVariation();
-    if (currentVariation != null && currentVariation['image'] is String && currentVariation['image'].isNotEmpty) {
+    if (currentVariation != null &&
+        currentVariation['image'] is String &&
+        currentVariation['image'].isNotEmpty) {
       final imageUrl = currentVariation['image'] as String;
       return [imageUrl];
     }
-
     
     // If no current variation found, collect all variation images
     final imageUrls = <String>[];
@@ -1476,16 +1210,18 @@ double? _parseNumericValue(dynamic value) {
       return null;
     }
 
-
     // Try to find exact match first
     for (final variation in variations) {
       final variationColor = variation['color']?.toString() ?? '';
       final variationStorage = variation['storage']?.toString() ?? '';
       final variationSim = variation['sim']?.toString() ?? '';
       
-      final matchesColor = selectedColor == null || selectedColor == variationColor;
-      final matchesStorage = selectedStorage == null || selectedStorage == variationStorage;
-      final matchesSim = selectedSimCard == null || selectedSimCard == variationSim;
+      final matchesColor =
+          selectedColor == null || selectedColor == variationColor;
+      final matchesStorage =
+          selectedStorage == null || selectedStorage == variationStorage;
+      final matchesSim =
+          selectedSimCard == null || selectedSimCard == variationSim;
       
       if (matchesColor && matchesStorage && matchesSim) {
         return variation;
@@ -1503,9 +1239,10 @@ double? _parseNumericValue(dynamic value) {
       
       int score = 0;
       if (selectedColor != null && selectedColor == variationColor) score += 3;
-      if (selectedStorage != null && selectedStorage == variationStorage) score += 2;
-      if (selectedSimCard != null && selectedSimCard == variationSim) score += 1;
-      
+      if (selectedStorage != null && selectedStorage == variationStorage)
+        score += 2;
+      if (selectedSimCard != null && selectedSimCard == variationSim)
+        score += 1;
       
       if (score > bestScore) {
         bestScore = score;
@@ -1645,4 +1382,3 @@ class _ProductImageCarouselState extends State<_ProductImageCarousel> {
     );
   }
 }
-

@@ -63,6 +63,15 @@ dependencies:
   # Maps
   yandex_mapkit: ^4.2.1
   
+  # Permissions
+  permission_handler: ^11.3.1
+  
+  # Location
+  geolocator: ^12.0.0
+  
+  # Yandex Geocoder
+  yandex_geocoder: ^2.3.1
+  
   # JSON serialization
   json_annotation: ^4.8.1
 

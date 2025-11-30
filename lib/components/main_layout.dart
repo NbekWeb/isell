@@ -19,12 +19,26 @@ class MainLayout extends StatefulWidget {
 
 class _MainLayoutState extends State<MainLayout> {
   late int _currentIndex;
+  bool _initializedFromRoute = false;
   final _cartPageKey = GlobalKey();
   
   @override
   void initState() {
     super.initState();
     _currentIndex = widget.initialIndex ?? 0;
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Agar '/home' route orqali arguments bilan kelsak, shu yerdan o'qib olamiz
+    if (!_initializedFromRoute) {
+      final args = ModalRoute.of(context)?.settings.arguments;
+      if (args is int) {
+        _currentIndex = args;
+      }
+      _initializedFromRoute = true;
+    }
   }
 
   List<Widget> get _pages => [

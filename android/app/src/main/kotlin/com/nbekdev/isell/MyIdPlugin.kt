@@ -34,9 +34,12 @@ import java.io.ByteArrayOutputStream
 class MyIdPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, MyIdResultListener {
     private lateinit var channel: MethodChannel
     private var activity: Activity? = null
+    private var activityBinding: ActivityPluginBinding? = null
     private var result: Result? = null
     // Activity result launcher not needed for plugin implementation
     private val myIdClient = MyIdClient()
+    // Store call parameters for retry after permission is granted
+    private var pendingCall: MethodCall? = null
 
     companion object {
         private const val TAG = "MyIdPlugin"
@@ -57,10 +60,18 @@ class MyIdPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, MyIdResultLi
 
     override fun onAttachedToActivity(binding: ActivityPluginBinding) {
         activity = binding.activity
+        activityBinding = binding
         Log.d(TAG, "MyIdPlugin attached to activity: ${activity?.javaClass?.simpleName}")
         
-        // Note: registerForActivityResult is not available in plugin context
-        // We'll use the deprecated startActivityForResult method instead
+        // Add permission result listener to handle camera permission
+        binding.addRequestPermissionsResultListener { requestCode, permissions, grantResults ->
+            if (requestCode == CAMERA_PERMISSION_REQUEST_CODE) {
+                handlePermissionResult(requestCode, permissions, grantResults)
+                true // We handled this request
+            } else {
+                false // We didn't handle this request
+            }
+        }
     }
 
     override fun onDetachedFromActivityForConfigChanges() {
@@ -69,11 +80,24 @@ class MyIdPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, MyIdResultLi
 
     override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) {
         activity = binding.activity
+        activityBinding = binding
         Log.d(TAG, "MyIdPlugin reattached to activity for config changes")
+        
+        // Re-add permission result listener
+        binding.addRequestPermissionsResultListener { requestCode, permissions, grantResults ->
+            if (requestCode == CAMERA_PERMISSION_REQUEST_CODE) {
+                handlePermissionResult(requestCode, permissions, grantResults)
+                true // We handled this request
+            } else {
+                false // We didn't handle this request
+            }
+        }
     }
 
     override fun onDetachedFromActivity() {
         activity = null
+        activityBinding = null
+        pendingCall = null
         Log.d(TAG, "MyIdPlugin detached from activity")
     }
 
@@ -103,12 +127,28 @@ class MyIdPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, MyIdResultLi
         if (ContextCompat.checkSelfPermission(activity, android.Manifest.permission.CAMERA) 
             != PackageManager.PERMISSION_GRANTED) {
             Log.d(TAG, "Camera permission not granted, requesting...")
+            // Store the call for retry after permission is granted
+            pendingCall = call
             ActivityCompat.requestPermissions(
                 activity,
                 arrayOf(android.Manifest.permission.CAMERA),
                 CAMERA_PERMISSION_REQUEST_CODE
             )
-            result?.error("CAMERA_PERMISSION_DENIED", "Camera permission is required for MyID SDK", null)
+            // Don't return error immediately - wait for permission result
+            // The result will be handled in handlePermissionResult
+            return
+        }
+
+        // Start MyID SDK (internal method that assumes permission is granted)
+        startMyIdInternal(call)
+    }
+
+    private fun startMyIdInternal(call: MethodCall) {
+        val activity = this.activity
+        if (activity == null) {
+            Log.e(TAG, "Activity is null")
+            result?.error("NO_ACTIVITY", "Activity is not available", null)
+            result = null
             return
         }
 
@@ -135,11 +175,13 @@ class MyIdPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, MyIdResultLi
 
             if (sessionId.isNullOrEmpty()) {
                 result?.error("INVALID_ARGUMENT", "sessionId is required", null)
+                result = null
                 return
             }
 
             if (clientHash.isNullOrEmpty() || clientHashId.isNullOrEmpty()) {
                 result?.error("INVALID_ARGUMENT", "clientHash and clientHashId are required", null)
+                result = null
                 return
             }
 
@@ -163,6 +205,31 @@ class MyIdPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, MyIdResultLi
         } catch (e: Exception) {
             Log.e(TAG, "Error starting MyID SDK", e)
             result?.error("SDK_ERROR", "Failed to start MyID SDK: ${e.message}", null)
+            result = null
+        }
+    }
+
+    // Handle permission result
+    private fun handlePermissionResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        if (requestCode == CAMERA_PERMISSION_REQUEST_CODE) {
+            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                Log.d(TAG, "Camera permission granted, retrying MyID SDK start...")
+                // Permission granted, retry starting MyID SDK
+                pendingCall?.let { call ->
+                    startMyIdInternal(call)
+                }
+                pendingCall = null
+            } else {
+                Log.d(TAG, "Camera permission denied")
+                // Permission denied, return error
+                result?.error(
+                    "CAMERA_PERMISSION_DENIED",
+                    "Camera permission is required for MyID SDK",
+                    null
+                )
+                result = null
+                pendingCall = null
+            }
         }
     }
 
@@ -194,10 +261,12 @@ class MyIdPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, MyIdResultLi
             Log.d(TAG, "  - comparisonValue: not available")
             
             result?.success(resultMap)
+            result = null
             
         } catch (e: Exception) {
             Log.e(TAG, "Error processing success result", e)
             result?.error("RESULT_ERROR", "Failed to process result: ${e.message}", null)
+            result = null
         }
     }
 
@@ -209,6 +278,7 @@ class MyIdPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, MyIdResultLi
             "message" to "User exited the SDK"
         )
         result?.success(resultMap)
+        result = null
     }
 
     override fun onError(exception: MyIdException) {
@@ -219,6 +289,7 @@ class MyIdPlugin : FlutterPlugin, MethodCallHandler, ActivityAware, MyIdResultLi
             "message" to exception.message
         )
         result?.success(resultMap)
+        result = null
     }
 
     override fun onEvent(event: MyIdEvent) {

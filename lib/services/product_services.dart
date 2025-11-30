@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:dio/dio.dart';
 
 import 'api_service.dart';
@@ -104,14 +105,12 @@ class ProductServices {
       final data = response.data;
 
       if (data is List) {
-        print('✅ Banner data is List, length: ${data.length}');
         final allBanners = data
             .map<Map<String, dynamic>>(
               (item) => Map<String, dynamic>.from(item as Map),
             )
             .toList();
 
-        print('📋 All banners (before filtering): ${allBanners.length}');
         for (var banner in allBanners) {
           print(
             '   - Banner ID: ${banner['id']}, is_active: ${banner['is_active']}, image: ${banner['image']}',
@@ -200,13 +199,10 @@ class ProductServices {
       );
 
       final data = response.data;
-      print('🔵 Tariffs API Response Data: ${data}');
       if (data is List) {
         // Filter only active tariffs and maintain API order
         final activeTariffs = data
-            .where(
-              (tariff) => tariff['is_active'] == true,
-            )
+            .where((tariff) => tariff['is_active'] == true)
             .map<Map<String, dynamic>>(
               (item) => Map<String, dynamic>.from(item as Map),
             )
@@ -240,7 +236,9 @@ class ProductServices {
         queryParams['variation_id'] = variationId;
       }
 
-      print('🔵 Calculate API Request: product/$productId/calculate/ with params: $queryParams');
+      print(
+        '🔵 Calculate API Request: product/$productId/calculate/ with params: $queryParams',
+      );
 
       final Response response = await ApiService.request(
         url: 'product/$productId/calculate/',
@@ -262,5 +260,65 @@ class ProductServices {
     }
 
     return null;
+  }
+
+  static Future<Map<String, dynamic>?> calculateSchedule({
+    required int calculationMode,
+    int? tariffId,
+    double? totalAdvancePayment,
+    List<Map<String, dynamic>>? productList,
+  }) async {
+    try {
+      final data = <String, dynamic>{'calculation_mode': calculationMode};
+
+      if (calculationMode == 1) {
+        if (tariffId != null) data['tariff_id'] = tariffId;
+        // Convert double to int for total_advance_payment
+        if (totalAdvancePayment != null) {
+          data['total_advance_payment'] = totalAdvancePayment.toInt();
+        }
+
+        // Add product_list for simple mode but without tariff_id and advance_payment
+        if (productList != null) {
+          final simpleProductList = productList.map((item) {
+            final Map<String, dynamic> simpleItem = {
+              'product_id': item['product_id'],
+              'quantity': item['quantity'],
+            };
+            // Add variation_id if it exists
+            if (item['variation_id'] != null) {
+              simpleItem['variation_id'] = item['variation_id'];
+            }
+            return simpleItem;
+          }).toList();
+          data['product_list'] = simpleProductList;
+        }
+      } else if (calculationMode == 2) {
+        if (productList != null) data['product_list'] = productList;
+      }
+
+      print('🔵 Calculate Schedule Request Body: $data');
+      print('🔵 Request Body JSON: ${jsonEncode(data)}');
+      
+      final Response response = await ApiService.request(
+        url: 'product/calculate-schedule/',
+        method: 'POST',
+        data: data,
+      );
+      
+      print('📥 Calculate Schedule Response Status: ${response.statusCode}');
+      print('📥 Calculate Schedule Response Data: ${response.data}');
+
+      if (response.statusCode == 200) {
+        return response.data;
+      }
+      return null;
+    } catch (e) {
+      print('❌ Error calculating schedule: $e');
+
+     
+
+      return null;
+    }
   }
 }

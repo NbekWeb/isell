@@ -66,9 +66,20 @@ class _SplashScreenState extends State<SplashScreen>
     // Check for access token and fetch user data if available
     await _checkAuthAndFetchUser();
 
+    // Check if delivery address needs to be entered
+    final prefs = await SharedPreferences.getInstance();
+    final accessToken = prefs.getString('accessToken');
+    final notEnteredDelivery = prefs.getBool('notEnteredDelivery') ?? false;
+
     // Animation is 2 seconds, navigate immediately after
     if (mounted) {
+      if (accessToken != null && accessToken.isNotEmpty && notEnteredDelivery) {
+        // Navigate to order address page
+        Navigator.of(context).pushReplacementNamed('/order-address');
+      } else {
+        // Navigate to home
       Navigator.of(context).pushReplacementNamed('/home');
+      }
     }
   }
 

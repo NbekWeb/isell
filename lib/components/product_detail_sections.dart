@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:google_fonts/google_fonts.dart';
 
@@ -265,29 +264,6 @@ class ProductFinancialSection extends StatefulWidget {
 }
 
 class _ProductFinancialSectionState extends State<ProductFinancialSection> {
-  late TextEditingController _controller;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = TextEditingController(
-      text: widget.downPayment == 0 ? '' : widget.downPayment.toString(),
-    );
-  }
-
-  @override
-  void didUpdateWidget(ProductFinancialSection oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.downPayment != widget.downPayment) {
-      _controller.text = widget.downPayment == 0 ? '' : widget.downPayment.toString();
-    }
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -296,93 +272,6 @@ class _ProductFinancialSectionState extends State<ProductFinancialSection> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'Общий первоначальный взнос',
-            style: GoogleFonts.poppins(
-              fontSize: 18.sp,
-              fontWeight: FontWeight.w600,
-              color: widget.textColor,
-            ),
-          ),
-          SizedBox(height: 12.h),
-          Container(
-            width: double.infinity,
-            decoration: BoxDecoration(
-              color: Colors.transparent,
-              border: Border.all(color: widget.borderColor, width: 1),
-              borderRadius: BorderRadius.circular(12.r),
-            ),
-            child: TextFormField(
-              controller: _controller,
-              keyboardType: TextInputType.number,
-              inputFormatters: [
-                FilteringTextInputFormatter.digitsOnly,
-                LengthLimitingTextInputFormatter(10), // Limit to 10 digits
-              ],
-              textAlign: TextAlign.center,
-              style: GoogleFonts.poppins(
-                color: widget.textColor,
-                fontSize: 16.sp,
-                fontWeight: FontWeight.w500,
-              ),
-              decoration: InputDecoration(
-                border: InputBorder.none,
-                contentPadding: EdgeInsets.symmetric(vertical: 12.h, horizontal: 16.w),
-                hintText: '0',
-                hintStyle: GoogleFonts.poppins(
-                  color: widget.textColor.withOpacity(0.5),
-                  fontSize: 16.sp,
-                ),
-                prefixText: '\$',
-                prefixStyle: GoogleFonts.poppins(
-                  color: widget.textColor,
-                  fontSize: 16.sp,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-              onChanged: (value) {
-                // Remove any non-digit characters
-                final cleanValue = value.replaceAll(RegExp(r'[^\d]'), '');
-                
-                // Parse the value, handle empty string as 0
-                final intValue = cleanValue.isEmpty ? 0 : int.tryParse(cleanValue) ?? 0;
-                
-                // Clamp the value between 0 and maxDownPayment
-                final clampedValue = intValue.clamp(0, widget.maxDownPayment);
-                
-                // Update controller if the value was clamped
-                if (clampedValue != intValue) {
-                  final newText = clampedValue == 0 ? '' : clampedValue.toString();
-                  _controller.value = _controller.value.copyWith(
-                    text: newText,
-                    selection: TextSelection.collapsed(offset: newText.length),
-                  );
-                }
-                
-                widget.onDownPaymentChanged(clampedValue);
-              },
-            ),
-          ),
-          SizedBox(height: 8.h),
-          Text(
-            widget.note,
-            style: GoogleFonts.poppins(
-              fontSize: 12.sp,
-              color: widget.subtitleColor,
-            ),
-          ),
-          SizedBox(height: 24.h),
-          Text(
-            'Срок рассрочки',
-            style: GoogleFonts.poppins(
-              fontSize: 18.sp,
-              fontWeight: FontWeight.w600,
-              color: widget.textColor,
-            ),
-          ),
-          SizedBox(height: 12.h),
-          widget.installmentSelector,
-          SizedBox(height: 24.h),
           if (widget.totalPrice.isNotEmpty) ...[
             Text(
               widget.totalPrice,

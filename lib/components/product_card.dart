@@ -293,11 +293,8 @@ class _ProductCardState extends State<ProductCard> with ProductCardHelpers {
                             ],
                           ),
                         )
-                      : Row(
-                          children: [
-                            // Details Button
-                            Expanded(
-                              child: SizedBox(
+                      : SizedBox(
+                          width: double.infinity,
                                 height: 40,
                                 child: OutlinedButton(
                                   onPressed: _openProductDetails,
@@ -319,29 +316,6 @@ class _ProductCardState extends State<ProductCard> with ProductCardHelpers {
                                     ),
                                   ),
                                 ),
-                              ),
-                            ),
-                            SizedBox(width: 10),
-
-                            // Add to Cart Button
-                            Container(
-                              width: 40,
-                              height: 40,
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF2196F3),
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: IconButton(
-                                onPressed: _openProductDetails,
-                                icon: Icon(
-                                  Icons.shopping_cart,
-                                  color: Colors.white,
-                                  size: 20,
-                                ),
-                                padding: EdgeInsets.zero,
-                              ),
-                            ),
-                          ],
                         ),
                   SizedBox(height: 10),
                 ],

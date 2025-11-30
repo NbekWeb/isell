@@ -99,6 +99,9 @@ class _PhoneInputPageState extends State<PhoneInputPage> {
   Future<void> _onContinue() async {
     if (!_isButtonEnabled || _isLoading) return;
 
+    // MyID SDK will handle camera permission request itself
+    // No need to check permission here
+    
     setState(() {
       _isLoading = true;
     });

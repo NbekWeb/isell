@@ -1,12 +1,18 @@
+import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../../services/cart_service.dart';
-import '../../services/myid_service.dart';
 import '../../services/product_services.dart';
-// import '../../services/api_service.dart'; // TODO: Uncomment when backend is ready
+import '../../services/api_service.dart';
+import '../../services/order_services.dart';
 import '../../widgets/custom_toast.dart';
+import '../product_detail_page.dart';
+import '../phone_input_page.dart';
 
 class CartPage extends StatefulWidget {
   const CartPage({super.key});
@@ -35,21 +41,125 @@ class _CartPageState extends State<CartPage>
   List<Map<String, dynamic>> _tariffs = [];
   Map<String, dynamic>? _selectedGlobalTariff;
   double _globalDownPayment = 0.0;
+  late TextEditingController _globalDownPaymentController;
+  Timer? _downPaymentDebounceTimer;
   
   // Complex mode values (stored per item)
   Map<String, Map<String, dynamic>?> _itemTariffs = {};
   Map<String, double> _itemDownPayments = {};
+  
+  // Storage instance
+  static const FlutterSecureStorage _storage = FlutterSecureStorage();
+  
+  // Payment schedule data
+  Map<String, dynamic>? _paymentSchedule;
+  bool _canBuy = true;
+  
+  // Cart tracking for changes
+  int _lastCartCount = 0;
+  Map<String, int> _lastCartQuantities = {};
+  
+  // Schedule check timer
+  Timer? _checkTimer;
+  int _remainingSeconds = 0;
+  bool _isChecking = false;
 
   @override
   void initState() {
     super.initState();
-    _loadCartItems();
-    _fetchTariffs();
+    _globalDownPaymentController = TextEditingController();
+    _initAsync();
     WidgetsBinding.instance.addObserver(this);
+    _loadLastCheckingTime();
+  }
+  
+  Future<void> _loadLastCheckingTime() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final lastCheckingStr = prefs.getString('lastChecking');
+      if (lastCheckingStr != null) {
+        final lastChecking = DateTime.parse(lastCheckingStr);
+        final now = DateTime.now();
+        final difference = now.difference(lastChecking);
+        if (difference.inSeconds < 60) {
+          if (mounted) {
+            setState(() {
+              _remainingSeconds = 60 - difference.inSeconds;
+              _isChecking = true;
+              _canBuy = false;
+            });
+            _startCheckTimer();
+          }
+        } else {
+          // Timer already expired, clear the stored time
+          await prefs.remove('lastChecking');
+          if (mounted) {
+            setState(() {
+              _isChecking = false;
+              _canBuy = true;
+            });
+          }
+        }
+      } else {
+        // No stored time, ensure button is enabled
+        if (mounted) {
+          setState(() {
+            _isChecking = false;
+            _canBuy = true;
+          });
+        }
+      }
+    } catch (e) {
+      print('❌ Error loading last checking time: $e');
+      if (mounted) {
+        setState(() {
+          _isChecking = false;
+          _canBuy = true;
+        });
+      }
+    }
+  }
+  
+  void _startCheckTimer() {
+    _checkTimer?.cancel();
+    _checkTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_remainingSeconds > 0) {
+        setState(() {
+          _remainingSeconds--;
+        });
+      } else {
+        timer.cancel();
+        if (mounted) {
+          setState(() {
+            _isChecking = false;
+            _canBuy = true;
+          });
+          // Don't close modal here - let modal timer handle it
+        }
+      }
+    });
+  }
+
+  Future<void> _saveCheckingTime() async {
+    try {
+      final now = DateTime.now();
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('lastChecking', now.toIso8601String());
+    } catch (e) {
+      print('❌ Error saving checking time: $e');
+    }
+  }
+
+  Future<void> _initAsync() async {
+    await _fetchTariffs();
+    _loadCartItems(); // _loadPaymentSchedule is called inside _loadCartItems
   }
 
   @override
   void dispose() {
+    _downPaymentDebounceTimer?.cancel();
+    _checkTimer?.cancel();
+    _globalDownPaymentController.dispose();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -77,15 +187,391 @@ class _CartPageState extends State<CartPage>
     _loadCartItems();
   }
 
+  // Load payment schedule from storage
+  Future<void> _loadPaymentSchedule() async {
+    try {
+      final scheduleJson = await _storage.read(key: 'payment_schedule');
+      final canBuyJson = await _storage.read(key: 'can_buy');
+      final savedCartCountJson = await _storage.read(key: 'saved_cart_count');
+      final savedCartQuantitiesJson = await _storage.read(key: 'saved_cart_quantities');
+      
+      // Load saved cart state
+      int? savedCartCount;
+      Map<String, int> savedCartQuantities = {};
+      
+      if (savedCartCountJson != null) {
+        savedCartCount = json.decode(savedCartCountJson) as int;
+      }
+      
+      if (savedCartQuantitiesJson != null) {
+        final decoded = json.decode(savedCartQuantitiesJson) as Map;
+        savedCartQuantities = decoded.map((key, value) => MapEntry(key.toString(), value as int));
+      }
+      
+      // Check if cart or down payment has changed (only if we have saved state)
+      bool hasChanged = false;
+      
+      if (savedCartCount != null || savedCartQuantities.isNotEmpty) {
+        final currentCount = cartItems.length;
+        final currentQuantities = <String, int>{};
+        for (final item in cartItems) {
+          final uniqueId = item['uniqueId'] as String;
+          final quantity = item['quantity'] as int;
+          currentQuantities[uniqueId] = quantity;
+        }
+        
+        // Check cart count/quantities
+        if (savedCartCount != null && savedCartCount != currentCount) {
+          hasChanged = true;
+        } else if (savedCartQuantities.isNotEmpty) {
+          // Check if quantities changed
+          for (final entry in currentQuantities.entries) {
+            if (savedCartQuantities[entry.key] != entry.value) {
+              hasChanged = true;
+              break;
+            }
+          }
+          // Check if items were removed
+          for (final oldKey in savedCartQuantities.keys) {
+            if (!currentQuantities.containsKey(oldKey)) {
+              hasChanged = true;
+              break;
+            }
+          }
+        }
+        
+        // Load and restore down payment state first (restore is not a change)
+        final savedGlobalDownPaymentJson = await _storage.read(key: 'saved_global_down_payment');
+        final savedItemDownPaymentsJson = await _storage.read(key: 'saved_item_down_payments');
+        
+        if (savedGlobalDownPaymentJson != null) {
+          final savedGlobalDownPayment = (json.decode(savedGlobalDownPaymentJson) as num).toDouble();
+          // Restore down payment if different (this is restoration, not a change)
+          if ((savedGlobalDownPayment - _globalDownPayment).abs() > 0.01) {
+            _globalDownPayment = savedGlobalDownPayment;
+            if (_globalDownPaymentController.text.isEmpty || 
+                int.tryParse(_globalDownPaymentController.text.replaceAll(RegExp(r'[^\d]'), '')) != _globalDownPayment.toInt()) {
+              _globalDownPaymentController.text = _globalDownPayment.toInt().toString();
+            }
+          }
+        }
+        
+        if (savedItemDownPaymentsJson != null) {
+          final decoded = json.decode(savedItemDownPaymentsJson) as Map;
+          final savedItemDownPayments = decoded.map((key, value) => MapEntry(key.toString(), (value as num).toDouble()));
+          
+          // Restore item down payments (this is restoration, not a change)
+          for (final entry in savedItemDownPayments.entries) {
+            _itemDownPayments[entry.key] = entry.value;
+          }
+        }
+        
+        // Load and restore tariff state (restore is not a change)
+        final savedGlobalTariffIdJson = await _storage.read(key: 'saved_global_tariff_id');
+        final savedItemTariffIdsJson = await _storage.read(key: 'saved_item_tariff_ids');
+        
+        if (savedGlobalTariffIdJson != null && _tariffs.isNotEmpty) {
+          final savedGlobalTariffId = json.decode(savedGlobalTariffIdJson) as int;
+          final currentTariffId = _selectedGlobalTariff?['id'] as int?;
+          if (currentTariffId != savedGlobalTariffId) {
+            // Restore global tariff
+            final tariff = _tariffs.firstWhere(
+              (t) => t['id'] == savedGlobalTariffId,
+              orElse: () => _tariffs.first,
+            );
+            _selectedGlobalTariff = tariff;
+          }
+        }
+        
+        if (savedItemTariffIdsJson != null && _tariffs.isNotEmpty) {
+          final decoded = json.decode(savedItemTariffIdsJson) as Map;
+          final savedItemTariffIds = decoded.map((key, value) => MapEntry(key.toString(), value as int));
+          
+          // Restore item tariffs
+          for (final entry in savedItemTariffIds.entries) {
+            final tariff = _tariffs.firstWhere(
+              (t) => t['id'] == entry.value,
+              orElse: () => _tariffs.first,
+            );
+            _itemTariffs[entry.key] = tariff;
+          }
+        }
+        
+        // Now check if down payment or tariff actually changed (after restoration)
+        final savedGlobalDownPaymentJson2 = await _storage.read(key: 'saved_global_down_payment');
+        final savedItemDownPaymentsJson2 = await _storage.read(key: 'saved_item_down_payments');
+        
+        if (savedGlobalDownPaymentJson2 != null) {
+          final savedGlobalDownPayment = (json.decode(savedGlobalDownPaymentJson2) as num).toDouble();
+          if ((savedGlobalDownPayment - _globalDownPayment).abs() > 0.01) {
+            hasChanged = true;
+          }
+        }
+        
+        if (savedItemDownPaymentsJson2 != null && !hasChanged) {
+          final decoded = json.decode(savedItemDownPaymentsJson2) as Map;
+          final savedItemDownPayments = decoded.map((key, value) => MapEntry(key.toString(), (value as num).toDouble()));
+          
+          // Check if item down payments changed
+          if (savedItemDownPayments.length != _itemDownPayments.length) {
+            hasChanged = true;
+          } else {
+            for (final entry in _itemDownPayments.entries) {
+              final savedValue = savedItemDownPayments[entry.key] ?? 0.0;
+              if ((savedValue - entry.value).abs() > 0.01) {
+                hasChanged = true;
+                break;
+              }
+            }
+          }
+        }
+        
+        // Check if tariff changed (after restoration)
+        final savedGlobalTariffIdJson2 = await _storage.read(key: 'saved_global_tariff_id');
+        final savedItemTariffIdsJson2 = await _storage.read(key: 'saved_item_tariff_ids');
+        
+        if (savedGlobalTariffIdJson2 != null && _tariffs.isNotEmpty && !hasChanged) {
+          final savedGlobalTariffId = json.decode(savedGlobalTariffIdJson2) as int;
+          final currentTariffId = _selectedGlobalTariff?['id'] as int?;
+          if (currentTariffId != savedGlobalTariffId) {
+            hasChanged = true;
+          }
+        }
+        
+        if (savedItemTariffIdsJson2 != null && _tariffs.isNotEmpty && !hasChanged) {
+          final decoded = json.decode(savedItemTariffIdsJson2) as Map;
+          final savedItemTariffIds = decoded.map((key, value) => MapEntry(key.toString(), value as int));
+          
+          // Check if item tariffs changed
+          for (final entry in savedItemTariffIds.entries) {
+            final currentTariff = _itemTariffs[entry.key];
+            final currentTariffId = currentTariff?['id'] as int?;
+            if (currentTariffId != entry.value) {
+              hasChanged = true;
+              break;
+            }
+          }
+        }
+        
+        // If cart or down payment changed, clear payment schedule
+        if (hasChanged) {
+          print('🔄 Cart or down payment changed since last save, clearing payment schedule');
+          await _clearPaymentSchedule();
+        } else {
+          // Load payment schedule if nothing changed
+          if (scheduleJson != null) {
+            _paymentSchedule = Map<String, dynamic>.from(
+              json.decode(scheduleJson) as Map
+            );
+          }
+          
+          if (canBuyJson != null) {
+            _canBuy = json.decode(canBuyJson) as bool;
+          }
+        }
+      } else {
+        // No saved cart state, just load payment schedule if exists
+        if (scheduleJson != null) {
+          _paymentSchedule = Map<String, dynamic>.from(
+            json.decode(scheduleJson) as Map
+          );
+        }
+        
+        if (canBuyJson != null) {
+          _canBuy = json.decode(canBuyJson) as bool;
+        }
+      }
+      
+      if (mounted) {
+        setState(() {});
+      }
+    } catch (e) {
+      print('❌ Error loading payment schedule: $e');
+    }
+  }
+
+  // Save payment schedule to storage
+  Future<void> _savePaymentSchedule(Map<String, dynamic> schedule) async {
+    try {
+      await _storage.write(key: 'payment_schedule', value: json.encode(schedule));
+      
+      // Save current cart state
+      final currentCount = cartItems.length;
+      final currentQuantities = <String, int>{};
+      for (final item in cartItems) {
+        final uniqueId = item['uniqueId'] as String;
+        final quantity = item['quantity'] as int;
+        currentQuantities[uniqueId] = quantity;
+      }
+      await _storage.write(key: 'saved_cart_count', value: json.encode(currentCount));
+      await _storage.write(key: 'saved_cart_quantities', value: json.encode(currentQuantities));
+      
+      // Save down payment state
+      await _storage.write(key: 'saved_global_down_payment', value: json.encode(_globalDownPayment));
+      final savedItemDownPayments = <String, double>{};
+      for (final entry in _itemDownPayments.entries) {
+        savedItemDownPayments[entry.key] = entry.value;
+      }
+      await _storage.write(key: 'saved_item_down_payments', value: json.encode(savedItemDownPayments));
+      
+      // Save tariff state
+      if (_selectedGlobalTariff != null) {
+        await _storage.write(key: 'saved_global_tariff_id', value: json.encode(_selectedGlobalTariff!['id']));
+      }
+      final savedItemTariffs = <String, int>{};
+      for (final entry in _itemTariffs.entries) {
+        if (entry.value != null) {
+          savedItemTariffs[entry.key] = entry.value!['id'] as int;
+        }
+      }
+      await _storage.write(key: 'saved_item_tariff_ids', value: json.encode(savedItemTariffs));
+      
+      // Check ability to order and status
+      final abilityToOrder = schedule['ability_to_order'] as bool? ?? false;
+      final status = schedule['status'] as String?;
+      
+      _canBuy = abilityToOrder && (status == 'approved' || status == null);
+      await _storage.write(key: 'can_buy', value: json.encode(_canBuy));
+      
+      // Show modal if can't buy (but only if not processing order - to avoid showing modal after order creation)
+      if (!_canBuy && !_isProcessingOrder) {
+        if (mounted) {
+          if (_isChecking) {
+            _showCheckingModal();
+          } else {
+            _showAdminCheckModal();
+          }
+        }
+      }
+      
+      _paymentSchedule = schedule;
+      
+      if (mounted) {
+        setState(() {});
+      }
+    } catch (e) {
+      print('❌ Error saving payment schedule: $e');
+    }
+  }
+
+  // Clear payment schedule from storage
+  Future<void> _clearPaymentSchedule() async {
+    try {
+      await _storage.delete(key: 'payment_schedule');
+      await _storage.delete(key: 'can_buy');
+      // Clear saved down payment and tariff data
+      await _storage.delete(key: 'saved_global_down_payment');
+      await _storage.delete(key: 'saved_global_tariff_id');
+      await _storage.delete(key: 'saved_item_down_payments');
+      await _storage.delete(key: 'saved_item_tariff_ids');
+      // Don't delete saved_cart_count and saved_cart_quantities here
+      // They will be updated when new schedule is saved
+      
+      _paymentSchedule = null;
+      _canBuy = true;
+      
+      if (mounted) {
+        setState(() {});
+      }
+    } catch (e) {
+      print('❌ Error clearing payment schedule: $e');
+    }
+  }
+
+  // Check for cart changes
+  Future<void> _checkCartChanges(List<Map<String, dynamic>> newItems) async {
+    final newCount = newItems.length;
+    final newQuantities = <String, int>{};
+    
+    for (final item in newItems) {
+      final uniqueId = item['uniqueId'] as String;
+      final quantity = item['quantity'] as int;
+      newQuantities[uniqueId] = quantity;
+    }
+    
+    // Load saved cart state from storage if not initialized
+    if (_lastCartCount == 0 && _lastCartQuantities.isEmpty) {
+      try {
+        final savedCartCountJson = await _storage.read(key: 'saved_cart_count');
+        final savedCartQuantitiesJson = await _storage.read(key: 'saved_cart_quantities');
+        
+        if (savedCartCountJson != null) {
+          _lastCartCount = json.decode(savedCartCountJson) as int;
+        }
+        
+        if (savedCartQuantitiesJson != null) {
+          final decoded = json.decode(savedCartQuantitiesJson) as Map;
+          _lastCartQuantities = decoded.map((key, value) => MapEntry(key.toString(), value as int));
+        }
+      } catch (e) {
+        print('⚠️ Error loading saved cart state: $e');
+      }
+    }
+    
+    // Check if cart count changed or quantities changed
+    bool hasChanges = false;
+    
+    if (_lastCartCount != newCount) {
+      hasChanges = true;
+      print('🔄 Cart count changed: $_lastCartCount -> $newCount');
+    } else {
+      // Check if quantities changed
+      for (final entry in newQuantities.entries) {
+        if (_lastCartQuantities[entry.key] != entry.value) {
+          hasChanges = true;
+          print('🔄 Cart quantity changed for ${entry.key}: ${_lastCartQuantities[entry.key]} -> ${entry.value}');
+          break;
+        }
+      }
+      
+      // Check if items were removed
+      for (final oldKey in _lastCartQuantities.keys) {
+        if (!newQuantities.containsKey(oldKey)) {
+          hasChanges = true;
+          print('🔄 Cart item removed: $oldKey');
+          break;
+        }
+      }
+    }
+    
+    if (hasChanges) {
+      print('🔄 Cart changes detected, clearing payment schedule and stopping timer');
+      await _clearPaymentSchedule();
+      
+      // Stop timer and reset checking state
+      _checkTimer?.cancel();
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('lastChecking');
+      
+      if (mounted) {
+        setState(() {
+          _isChecking = false;
+          _canBuy = true;
+          _remainingSeconds = 0;
+        });
+      }
+    }
+    
+    _lastCartCount = newCount;
+    _lastCartQuantities = newQuantities;
+  }
+
   Future<void> _loadCartItems() async {
     setState(() {
       _isLoading = true;
     });
     final items = await CartService.getCartItems();
+    
+    // Check for cart changes
+    await _checkCartChanges(items);
+    
     setState(() {
       cartItems = items;
       _isLoading = false;
     });
+    
+    // Load payment schedule after cart items are loaded
+    await _loadPaymentSchedule();
   }
 
   Future<void> _fetchTariffs() async {
@@ -93,17 +579,9 @@ class _CartPageState extends State<CartPage>
       final tariffs = await ProductServices.getTariffs();
       setState(() {
         _tariffs = tariffs;
-        // Set default tariff (prioritize "Без рассрочки", then "1 month")
+        // Set default tariff to first one from response
         if (tariffs.isNotEmpty) {
-          try {
-            _selectedGlobalTariff = tariffs.firstWhere((tariff) => tariff['payments_count'] == 0);
-          } catch (e) {
-            try {
-              _selectedGlobalTariff = tariffs.firstWhere((tariff) => tariff['payments_count'] == 1);
-            } catch (e) {
               _selectedGlobalTariff = tariffs.first;
-            }
-          }
         }
       });
     } catch (e) {
@@ -135,6 +613,17 @@ class _CartPageState extends State<CartPage>
     final isUsed = _isUsedProduct(item);
 
     // Ishlatilgan mahsulotlar uchun miqdorni 1 ga cheklash
+    // Agar miqdor allaqachon 1 bo'lsa va + bosilsa, toast ko'rsatish
+    if (isUsed && currentQuantity >= 1 && delta > 0) {
+      CustomToast.show(
+        context,
+        message: 'Б/у товар можно добавить только в количестве 1 штуки',
+        isSuccess: false,
+      );
+      return;
+    }
+    
+    // Agar b/u mahsulot bo'lsa va newQuantity > 1 bo'lsa ham cheklash
     if (isUsed && newQuantity > 1) {
       CustomToast.show(
         context,
@@ -158,40 +647,6 @@ class _CartPageState extends State<CartPage>
     await _loadCartItems();
   }
 
-  String _formatTariffName(String name) {
-    // Handle "No installment" case
-    if (name.toLowerCase() == 'no installment') {
-      return 'Без рассрочки';
-    }
-    
-    // Handle month + days format like "12m (+15d)"
-    if (name.contains('m') && name.contains('(') && name.contains('d)')) {
-      final regex = RegExp(r'(\d+)m \(\+(\d+)d\)');
-      final match = regex.firstMatch(name);
-      if (match != null) {
-        final months = match.group(1);
-        final days = match.group(2);
-        return '$months мес (+${days}д)';
-      }
-    }
-    
-    // Handle simple month format like "12m"
-    if (name.contains('m') && !name.contains('(')) {
-      final monthsMatch = RegExp(r'(\d+)m').firstMatch(name);
-      if (monthsMatch != null) {
-        final months = monthsMatch.group(1);
-        return '$months мес';
-      }
-    }
-    
-    // Handle days only format like "15d"
-    if (name == '15d') {
-      return '15 дней';
-    }
-    
-    // Return original name if no pattern matches
-    return name;
-  }
 
   double _calculateTotal() {
     return cartItems.fold(0.0, (sum, item) {
@@ -375,16 +830,29 @@ class _CartPageState extends State<CartPage>
           ),
           SizedBox(height: 12.h),
           
-          // Down Payment Input
-          Container(
+
+          Builder(
+            builder: (context) {
+              final isNoInstallment = _selectedGlobalTariff != null && 
+                  (_selectedGlobalTariff!['payments_count'] == 0 || 
+                   _selectedGlobalTariff!['name']?.toString().toLowerCase() == 'no installment' ||
+                   (_selectedGlobalTariff!['coefficient'] as num?)?.toDouble() == 1.0);
+              
+              return Container(
             width: double.infinity,
             decoration: BoxDecoration(
               color: Colors.transparent,
-              border: Border.all(color: textColor, width: 1),
+                  border: Border.all(
+                    color: isNoInstallment 
+                        ? textColor.withOpacity(0.3) 
+                        : textColor, 
+                    width: 1
+                  ),
               borderRadius: BorderRadius.circular(12.r),
             ),
             child: TextFormField(
-              initialValue: _globalDownPayment == 0.0 ? '' : _globalDownPayment.toInt().toString(),
+                  enabled: !isNoInstallment,
+              controller: _globalDownPaymentController,
               keyboardType: TextInputType.number,
               inputFormatters: [
                 FilteringTextInputFormatter.digitsOnly,
@@ -392,7 +860,9 @@ class _CartPageState extends State<CartPage>
               ],
               textAlign: TextAlign.center,
               style: GoogleFonts.poppins(
-                color: textColor,
+                    color: isNoInstallment 
+                        ? textColor.withOpacity(0.5) 
+                        : textColor,
                 fontSize: 16.sp,
                 fontWeight: FontWeight.w500,
               ),
@@ -406,19 +876,75 @@ class _CartPageState extends State<CartPage>
                 ),
                 prefixText: '\$',
                 prefixStyle: GoogleFonts.poppins(
-                  color: textColor,
+                      color: isNoInstallment 
+                          ? textColor.withOpacity(0.5) 
+                          : textColor,
                   fontSize: 16.sp,
                   fontWeight: FontWeight.w500,
                 ),
               ),
+              onTapOutside: (event) {
+                // Close keyboard when tapping outside
+                FocusScope.of(context).unfocus();
+              },
               onChanged: (value) {
-                final cleanValue = value.replaceAll(RegExp(r'[^\d]'), '');
+                    if (isNoInstallment) return;
+                
+                // Stop checking timer if down payment changes
+                _checkTimer?.cancel();
+                final prefs = SharedPreferences.getInstance();
+                prefs.then((p) => p.remove('lastChecking'));
+                if (mounted) {
+                  setState(() {
+                    _isChecking = false;
+                    _canBuy = true;
+                    _remainingSeconds = 0;
+                  });
+                }
+                
+                // Cancel previous timer
+                _downPaymentDebounceTimer?.cancel();
+                
+                // Get total to validate against
+                final total = _calculateTotal();
+                
+                // Start debounce timer
+                _downPaymentDebounceTimer = Timer(const Duration(milliseconds: 300), () {
+                  if (!mounted) return;
+                  
+                  final cleanValue = _globalDownPaymentController.text.replaceAll(RegExp(r'[^\d]'), '');
                 final intValue = cleanValue.isEmpty ? 0 : int.tryParse(cleanValue) ?? 0;
+                  
+                  // Clamp down payment to not exceed total
+                  final clampedValue = intValue.clamp(0, total.toInt());
+                  
+                  // Update field if value was clamped (only if different from what user typed)
+                  if (clampedValue != intValue) {
+                    final newText = clampedValue == 0 ? '' : clampedValue.toString();
+                    _globalDownPaymentController.value = TextEditingValue(
+                      text: newText,
+                      selection: TextSelection.collapsed(offset: newText.length),
+                    );
+                    
+                    // Show toast message
+                    CustomToast.show(
+                      context,
+                      message: 'Первоначальный взнос не может превышать общую сумму',
+                      isSuccess: false,
+                    );
+                  }
+                  
+                  // Update state only after debounce
+                  if (_globalDownPayment != clampedValue.toDouble()) {
                 setState(() {
-                  _globalDownPayment = intValue.toDouble();
+                      _globalDownPayment = clampedValue.toDouble();
+                    });
+                  }
                 });
               },
             ),
+              );
+            },
           ),
           
           SizedBox(height: 16.h),
@@ -501,11 +1027,8 @@ class _CartPageState extends State<CartPage>
                   ],
                 ),
                 SizedBox(height: 8.h),
-                _buildSummaryRow('Стоимость товаров:', _formatUsdAmount(total), textColor),
+                _buildSummaryRow('Общая сумма:', _formatUsdAmount(total), textColor),
                 _buildSummaryRow('Первоначальный взнос:', _formatUsdAmount(_globalDownPayment), textColor),
-                _buildSummaryRow('Общий ежемесячный платеж:', _formatUsdAmount(monthlyPayment), textColor, isHighlighted: true),
-                if (_globalDownPayment > 0)
-                  _buildSummaryRow('Минимальный взнос:', _formatUsdAmount(total * 0.1), textColor.withOpacity(0.7)),
               ],
             ),
           ),
@@ -581,11 +1104,15 @@ class _CartPageState extends State<CartPage>
                 ),
                 prefixText: '\$',
                 prefixStyle: GoogleFonts.poppins(
-                  color: textColor,
+color: textColor,
                   fontSize: 16.sp,
                   fontWeight: FontWeight.w500,
                 ),
               ),
+              onTapOutside: (event) {
+                // Close keyboard when tapping outside
+                FocusScope.of(context).unfocus();
+              },
               onChanged: (value) {
                 final cleanValue = value.replaceAll(RegExp(r'[^\d]'), '');
                 final intValue = cleanValue.isEmpty ? 0 : int.tryParse(cleanValue) ?? 0;
@@ -626,7 +1153,7 @@ class _CartPageState extends State<CartPage>
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Text(
-                    globalTariff != null ? _formatTariffName(globalTariff['name'] ?? '') : '6 месяц',
+                    globalTariff != null ? (globalTariff['name'] ?? '') : '6 месяц',
                     style: GoogleFonts.poppins(
                       fontSize: 16.sp,
                       fontWeight: FontWeight.w500,
@@ -778,7 +1305,7 @@ class _CartPageState extends State<CartPage>
                           vertical: 8.h,
                         ),
                         title: Text(
-                          _formatTariffName(tariff['name'] ?? ''),
+                          tariff['name'] ?? '',
                           style: GoogleFonts.poppins(
                             fontSize: 16.sp,
                             fontWeight: FontWeight.w500,
@@ -802,9 +1329,17 @@ class _CartPageState extends State<CartPage>
                                 color: const Color(0xFF4E63EC),
                               )
                             : null,
-                        onTap: () {
+                        onTap: () async {
+                          // Stop timer if tariff changes
+                          _checkTimer?.cancel();
+                          final prefs = await SharedPreferences.getInstance();
+                          await prefs.remove('lastChecking');
+                          
                           setState(() {
                             _itemTariffs[uniqueId] = tariff;
+                            _isChecking = false;
+                            _canBuy = true;
+                            _remainingSeconds = 0;
                           });
                           Navigator.pop(context);
                         },
@@ -896,6 +1431,10 @@ class _CartPageState extends State<CartPage>
             );
           }),
           
+          // Payment Schedule Card
+          if (_paymentSchedule != null)
+            _buildPaymentScheduleCard(textColor, cardColor),
+          
           // Calculation Section
           if (_isSimpleMode) 
             _buildSimpleModeCalculation(textColor, cardColor),
@@ -905,8 +1444,12 @@ class _CartPageState extends State<CartPage>
           SizedBox(
             width: double.infinity,
             height: 48.h,
+            child: Opacity(
+              opacity: (_canBuy && !_isChecking) ? 1.0 : 0.6,
             child: ElevatedButton(
-              onPressed: _isProcessingOrder ? null : _handlePlaceOrder,
+                onPressed: (_isProcessingOrder) 
+                    ? null
+                    : (_isChecking ? _handleCheckOrder : _handlePlaceOrder),
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF1B7EFF),
                 shape: RoundedRectangleBorder(
@@ -923,11 +1466,12 @@ class _CartPageState extends State<CartPage>
                       ),
                     )
                   : Text(
-                      'Оформить',
+                      _isChecking ? 'Проверить' : 'Оформить',
                       style: GoogleFonts.poppins(
                         fontSize: 16.sp,
                         fontWeight: FontWeight.w600,
                         color: Colors.white,
+                        ),
                       ),
                     ),
             ),
@@ -939,6 +1483,43 @@ class _CartPageState extends State<CartPage>
     );
   }
 
+  Map<String, dynamic> _buildProductFromCartItem(Map<String, dynamic> item) {
+    // Cart item'dan product ma'lumotlarini yig'ish
+    // Convert product_id to int
+    final productId = item['id'] is int 
+        ? item['id'] 
+        : int.tryParse(item['id'].toString()) ?? item['id'];
+    
+    final product = {
+      'product_id': productId,
+      'product_name': item['name'],
+      'price': item['price'],
+      'image': item['image'],
+      'variations': [
+        {
+          'color': item['selectedColor'],
+          'storage': item['selectedStorage'],
+          'sim': item['selectedSim'],
+          'price': item['price'],
+          'image': item['image'],
+        }
+      ],
+    };
+    return product;
+  }
+
+  Future<void> _navigateToProductDetail(Map<String, dynamic> item) async {
+    final product = _buildProductFromCartItem(item);
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ProductDetailPage(product: product),
+      ),
+    );
+    // Cart'ni yangilash
+    await _loadCartItems();
+  }
+
   Widget _buildCartItem(
     Map<String, dynamic> item,
     Color textColor,
@@ -948,7 +1529,9 @@ class _CartPageState extends State<CartPage>
     final uniqueId = item['uniqueId'] as String;
     final backgroundColor = Theme.of(context).scaffoldBackgroundColor;
 
-    return Container(
+    return GestureDetector(
+      onTap: () => _navigateToProductDetail(item),
+      child: Container(
       margin: EdgeInsets.only(bottom: 16.h),
       padding: EdgeInsets.all(12.w),
       decoration: BoxDecoration(
@@ -1022,7 +1605,9 @@ class _CartPageState extends State<CartPage>
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   // Minus Button
-                  Container(
+                    GestureDetector(
+                      onTap: () => _updateQuantity(uniqueId, -1),
+                      child: Container(
                     width: 32.w,
                     height: 32.w,
                     decoration: BoxDecoration(
@@ -1030,10 +1615,7 @@ class _CartPageState extends State<CartPage>
                       border: Border.all(color: borderColor, width: 1),
                       shape: BoxShape.circle,
                     ),
-                    child: IconButton(
-                      onPressed: () => _updateQuantity(uniqueId, -1),
-                      icon: Icon(Icons.remove, color: textColor, size: 18.w),
-                      padding: EdgeInsets.zero,
+                        child: Icon(Icons.remove, color: textColor, size: 18.w),
                     ),
                   ),
                   SizedBox(width: 16.w),
@@ -1048,7 +1630,9 @@ class _CartPageState extends State<CartPage>
                   ),
                   SizedBox(width: 16.w),
                   // Plus Button
-                  Container(
+                    GestureDetector(
+                      onTap: () => _updateQuantity(uniqueId, 1),
+                      child: Container(
                     width: 32.w,
                     height: 32.w,
                     decoration: BoxDecoration(
@@ -1056,18 +1640,11 @@ class _CartPageState extends State<CartPage>
                       border: Border.all(color: borderColor, width: 1),
                       shape: BoxShape.circle,
                     ),
-                    child: IconButton(
-                      onPressed: _isUsedProduct(item) && (item['quantity'] as int) >= 1
-                          ? null // Ishlatilgan mahsulot uchun o'chirish
-                          : () => _updateQuantity(uniqueId, 1),
-                      icon: Icon(
+                        child: Icon(
                         Icons.add, 
-                        color: _isUsedProduct(item) && (item['quantity'] as int) >= 1
-                            ? textColor.withOpacity(0.3)
-                            : textColor, 
-                        size: 18.w
+                          color: textColor,
+                          size: 18.w,
                       ),
-                      padding: EdgeInsets.zero,
                     ),
                   ),
                 ],
@@ -1084,13 +1661,16 @@ class _CartPageState extends State<CartPage>
           Positioned(
             top: 0,
             right: 0,
-            child: IconButton(
-              onPressed: () => _removeItem(uniqueId),
-              icon: Icon(Icons.delete_outline, color: Colors.red, size: 24.w),
-              padding: EdgeInsets.zero,
+              child: GestureDetector(
+                onTap: () => _removeItem(uniqueId),
+                child: Container(
+                  padding: EdgeInsets.all(8.w),
+                  child: Icon(Icons.delete_outline, color: Colors.red, size: 24.w),
+                ),
             ),
           ),
         ],
+        ),
       ),
     );
   }
@@ -1161,6 +1741,179 @@ class _CartPageState extends State<CartPage>
     return parts.join(' • ');
   }
 
+  // Check order status (for "Проверить" button)
+  Future<void> _handleCheckOrder() async {
+    if (_isProcessingOrder) return;
+    
+    // If checking, show modal first
+    if (_isChecking) {
+      _showCheckingModal();
+      return;
+    }
+    
+    setState(() {
+      _isProcessingOrder = true;
+    });
+
+    try {
+      // Call schedule API again to check status
+      Map<String, dynamic>? result;
+      
+      if (_isSimpleMode) {
+        final tariffId = _selectedGlobalTariff?['id'];
+        if (tariffId == null) {
+          setState(() {
+            _isProcessingOrder = false;
+          });
+          return;
+        }
+
+        final productList = <Map<String, dynamic>>[];
+        for (final item in cartItems) {
+          final productId = item['id'] is int 
+              ? item['id'] 
+              : int.tryParse(item['id'].toString()) ?? item['id'];
+          final quantity = item['quantity'] is int 
+              ? item['quantity'] 
+              : int.tryParse(item['quantity'].toString()) ?? item['quantity'];
+          
+          final productItem = <String, dynamic>{
+            'product_id': productId,
+            'quantity': quantity,
+          };
+          if (item['variation_id'] != null) {
+            final variationId = item['variation_id'] is int 
+                ? item['variation_id'] 
+                : int.tryParse(item['variation_id'].toString());
+            if (variationId != null) {
+              productItem['variation_id'] = variationId;
+            }
+          }
+          productList.add(productItem);
+        }
+
+        result = await ProductServices.calculateSchedule(
+          calculationMode: 1,
+          tariffId: int.tryParse(tariffId.toString()),
+          totalAdvancePayment: _globalDownPayment,
+          productList: productList,
+        );
+      } else {
+        final productList = <Map<String, dynamic>>[];
+        for (final item in cartItems) {
+          final uniqueId = item['uniqueId'] as String;
+          final tariff = _itemTariffs[uniqueId];
+          final downPayment = _itemDownPayments[uniqueId] ?? 0.0;
+          
+          if (tariff == null) {
+            setState(() {
+              _isProcessingOrder = false;
+            });
+            return;
+          }
+
+          final productId = item['id'] is int 
+              ? item['id'] 
+              : int.tryParse(item['id'].toString()) ?? item['id'];
+          final quantity = item['quantity'] is int 
+              ? item['quantity'] 
+              : int.tryParse(item['quantity'].toString()) ?? item['quantity'];
+          final tariffId = tariff['id'] is int 
+              ? tariff['id'] 
+              : int.tryParse(tariff['id'].toString()) ?? tariff['id'];
+          final advancePayment = downPayment is int 
+              ? downPayment 
+              : downPayment.toInt();
+          
+          final productItem = <String, dynamic>{
+            'product_id': productId,
+            'quantity': quantity,
+            'tariff_id': tariffId,
+            'advance_payment': advancePayment,
+          };
+          if (item['variation_id'] != null) {
+            final variationId = item['variation_id'] is int 
+                ? item['variation_id'] 
+                : int.tryParse(item['variation_id'].toString());
+            if (variationId != null) {
+              productItem['variation_id'] = variationId;
+            }
+          }
+          productList.add(productItem);
+        }
+
+        result = await ProductServices.calculateSchedule(
+          calculationMode: 2,
+          productList: productList,
+        );
+      }
+
+      if (result != null) {
+        final abilityToOrder = result['ability_to_order'] as bool? ?? true;
+        final status = result['status']?.toString() ?? '';
+        
+        if (abilityToOrder && status.toLowerCase() == 'accepted') {
+          // Accepted - clear checking state and allow order
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.remove('lastChecking');
+          
+          setState(() {
+            _isChecking = false;
+            _canBuy = true;
+            _remainingSeconds = 0;
+          });
+          
+          _checkTimer?.cancel();
+          
+          // Close modal if open
+          if (mounted) {
+            Navigator.of(context).pop();
+          }
+          
+          // Save schedule and proceed
+          await _savePaymentSchedule(result);
+          
+          CustomToast.show(
+            context,
+            message: 'Заказ подтвержден! Теперь вы можете оформить заказ.',
+            isSuccess: true,
+          );
+        } else {
+          // Still not accepted - update timer
+          final now = DateTime.now();
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString('lastChecking', now.toIso8601String());
+          
+          setState(() {
+            _isChecking = true;
+            _remainingSeconds = 60;
+            _canBuy = false;
+          });
+          
+          _startCheckTimer();
+          
+          await _savePaymentSchedule(result);
+          
+          // Show modal after checking
+          _showCheckingModal();
+        }
+      }
+    } catch (e) {
+      print('❌ Error checking order: $e');
+      CustomToast.show(
+        context,
+        message: 'Ошибка при проверке заказа',
+        isSuccess: false,
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isProcessingOrder = false;
+        });
+      }
+    }
+  }
+
   Future<void> _handlePlaceOrder() async {
     if (cartItems.isEmpty) {
       CustomToast.show(context, message: 'Корзина пуста', isSuccess: false);
@@ -1171,136 +1924,474 @@ class _CartPageState extends State<CartPage>
       return;
     }
 
+    // Check if user can buy
+    if (!_canBuy) {
+      // If checking, show modal instead of toast
+      if (_isChecking) {
+        _showCheckingModal();
+      } else {
+        _showAdminCheckModal();
+      }
+      return;
+    }
+
     setState(() {
       _isProcessingOrder = true;
     });
 
     try {
-      // Step 1: Get session ID from MyID API directly
-      print('🔵 Step 1: Getting session ID from MyID API...');
-      String sessionId;
-
-      // Option 1: From YOUR backend (commented out)
-      // try {
-      //   final response = await ApiService.request(
-      //     url: 'accounts/myid/session/',
-      //     method: 'POST',
-      //     data: {
-      //       'phone_number': '998770580502', // Optional
-      //       'birth_date': '2003-05-02', // Optional
-      //       'pinfl': '50205035360010', // Optional
-      //       'pass_data': 'AC2190972', // Optional
-      //     },
-      //   );
-      //   if (response.data != null &&
-      //       response.data['success'] == true &&
-      //       response.data['data'] != null &&
-      //       response.data['data']['session_id'] != null) {
-      //     sessionId = response.data['data']['session_id'] as String;
-      //     print('✅ Session ID obtained from backend: $sessionId');
-      //   } else {
-      //     throw Exception('Session ID not found in backend response');
-      //   }
-      // } catch (e) {
-      //   print('⚠️ Backend endpoint not available. Using direct MyID API...');
-      // }
-
-      // Option 2: Directly from MyID API (using now)
+      // Step 1: Check if access token exists
+      print('🔵 Step 1: Checking access token...');
+      String? accessToken;
+      
       try {
-        // All parameters are optional - SDK will ask user if not provided
-        sessionId = await MyIdService.getSessionId(
-          // phoneNumber: '998770580502', // Optional
-          // birthDate: '2003-05-02', // Optional
-          // pinfl: '50205035360010', // Optional
-          // passData: 'AC2190972', // Optional
-        );
-        print('✅ Session ID obtained from MyID API: $sessionId');
-      } catch (apiError) {
-        print('❌ Failed to get session ID from MyID API: $apiError');
-        throw Exception('Failed to get session ID from MyID API: ${apiError.toString()}');
+        final prefs = await SharedPreferences.getInstance();
+        accessToken = prefs.getString('accessToken');
+        
+        // Fallback to secure storage if not found in SharedPreferences
+        if (accessToken == null) {
+          accessToken = await _storage.read(key: 'access_token');
+        }
+        
+        // Use memory token as last resort
+        if (accessToken == null && ApiService.memoryToken != null) {
+          accessToken = ApiService.memoryToken;
+        }
+      } catch (e) {
+        print('❌ Error checking access token: $e');
       }
 
-  
-
-      // Debug: Print session ID details
-      print('🔍 Session ID details:');
-      print('   - sessionId: $sessionId');
-      print('   - sessionId length: ${sessionId.length}');
-      print('   - clientHashId: ${MyIdService.clientHashId}');
-
-      // Start SDK immediately - session expires quickly, no delay needed
-      // Backend is on dev server, so use debug environment
-      final result = await MyIdService.startAuthentication(
-        sessionId: sessionId,
-        clientHash: MyIdService.clientHash,
-        clientHashId: MyIdService.clientHashId,
-        environment: 'debug', // Backend is on dev server (http://192.81.218.80:6060)
-        entryType: 'identification',
-        locale: 'russian',
-      );
-
-      // Step 3: SDK returned code (image was captured and verified by MyID servers)
-      if (result.code != null) {
-        CustomToast.show(
-          context,
-          message: 'Авторизация успешна. Оформление заказа...',
-          isSuccess: true,
-        );
-
-        // Step 4: Show debug page with code and access token for backend testing
-        print('📤 Step 4: Navigating to debug page...');
-        try {
-          // Get fresh access token for backend testing
-          final accessToken = await MyIdService.getAccessToken();
-          
-          
-          CustomToast.show(
-            context,
-            message: 'Авторизация успешна. Переход к отладочной странице...',
-            isSuccess: true,
-          );
-          
-          // Show success message
-          CustomToast.show(
-            context,
-            message: 'MyID верификация успешна!',
-            isSuccess: true,
-          );
-          
+      if (accessToken == null) {
+        print('❌ No access token found, redirecting to login');
         
-          
-        } catch (e) {
-          print('❌ Error getting access token: $e');
-          CustomToast.show(
-            context,
-            message: 'Ошибка при получении токена: ${e.toString()}',
-            isSuccess: false,
+        // Navigate directly to login page
+        if (mounted) {
+          Navigator.of(context).pushAndRemoveUntil(
+            MaterialPageRoute(
+              builder: (context) => const PhoneInputPage(),
+            ),
+            (route) => false,
           );
         }
-      }
-    } on MyIdException catch (e) {
-      String errorMessage = 'Ошибка авторизации';
-
-      // Handle specific error codes
-      switch (e.code) {
-        case '102':
-          errorMessage = 'Доступ к камере запрещен';
-          break;
-        case '103':
-          errorMessage = 'Ошибка при получении данных';
-          break;
-        case '122':
-          errorMessage = 'Пользователь заблокирован';
-          break;
-        case 'USER_EXITED':
-          errorMessage = 'Авторизация отменена';
-          break;
-        default:
-          errorMessage = e.message;
+        return;
       }
 
-      CustomToast.show(context, message: errorMessage, isSuccess: false);
+      print('✅ Access token found, proceeding with order...');
+
+      // Step 2: Call payment schedule calculation API
+      print('🔵 Step 2: Calling payment schedule calculation API...');
+      
+      Map<String, dynamic>? result;
+      
+      if (_isSimpleMode) {
+        // Simple mode (calculation_mode = 1)
+        print('📤 Simple mode - sending calculation_mode: 1');
+        
+        final tariffId = _selectedGlobalTariff?['id'];
+        if (tariffId == null) {
+        CustomToast.show(
+          context,
+            message: 'Выберите срок рассрочки',
+            isSuccess: false,
+        );
+          return;
+        }
+
+        // Create product list for simple mode (without tariff_id and advance_payment)
+        final productList = <Map<String, dynamic>>[];
+        for (final item in cartItems) {
+          // Convert product_id to int
+          final productId = item['id'] is int 
+              ? item['id'] 
+              : int.tryParse(item['id'].toString()) ?? item['id'];
+          
+          // Convert quantity to int
+          final quantity = item['quantity'] is int 
+              ? item['quantity'] 
+              : int.tryParse(item['quantity'].toString()) ?? item['quantity'];
+          
+          final productItem = <String, dynamic>{
+            'product_id': productId,
+            'quantity': quantity,
+          };
+          // Add variation_id only if it exists and is not null
+          if (item['variation_id'] != null) {
+            final variationId = item['variation_id'] is int 
+                ? item['variation_id'] 
+                : int.tryParse(item['variation_id'].toString());
+            if (variationId != null) {
+              productItem['variation_id'] = variationId;
+            }
+          }
+          productList.add(productItem);
+        }
+
+        result = await ProductServices.calculateSchedule(
+          calculationMode: 1,
+          tariffId: int.tryParse(tariffId.toString()),
+          totalAdvancePayment: _globalDownPayment,
+          productList: productList,
+        );
+        
+        print('📥 Simple mode API response: $result');
+        
+      } else {
+        // Complex mode (calculation_mode = 2)
+        print('📤 Complex mode - sending calculation_mode: 2');
+        
+        final productList = <Map<String, dynamic>>[];
+        
+        for (final item in cartItems) {
+          final uniqueId = item['uniqueId'] as String;
+          final tariff = _itemTariffs[uniqueId];
+          final downPayment = _itemDownPayments[uniqueId] ?? 0.0;
+          
+          if (tariff == null) {
+          CustomToast.show(
+            context,
+              message: 'Выберите срок рассрочки для всех товаров',
+              isSuccess: false,
+            );
+            return;
+          }
+
+          // Convert product_id to int
+          final productId = item['id'] is int 
+              ? item['id'] 
+              : int.tryParse(item['id'].toString()) ?? item['id'];
+          
+          // Convert quantity to int
+          final quantity = item['quantity'] is int 
+              ? item['quantity'] 
+              : int.tryParse(item['quantity'].toString()) ?? item['quantity'];
+          
+          // Convert tariff_id to int
+          final tariffId = tariff['id'] is int 
+              ? tariff['id'] 
+              : int.tryParse(tariff['id'].toString()) ?? tariff['id'];
+          
+          // Convert advance_payment to int
+          final advancePayment = downPayment is int 
+              ? downPayment 
+              : downPayment.toInt();
+          
+          final productItem = <String, dynamic>{
+            'product_id': productId,
+            'quantity': quantity,
+            'tariff_id': tariffId,
+            'advance_payment': advancePayment,
+          };
+          // Add variation_id only if it exists and is not null
+          if (item['variation_id'] != null) {
+            final variationId = item['variation_id'] is int 
+                ? item['variation_id'] 
+                : int.tryParse(item['variation_id'].toString());
+            if (variationId != null) {
+              productItem['variation_id'] = variationId;
+            }
+          }
+          productList.add(productItem);
+        }
+
+        result = await ProductServices.calculateSchedule(
+          calculationMode: 2,
+          productList: productList,
+        );
+        
+        print('📥 Complex mode API response: $result');
+      }
+
+      // Step 3: Handle the response
+      if (result != null) {
+        print('✅ Payment schedule calculation successful!');
+        print('📋 Response details: $result');
+        
+        // Check ability_to_order and status
+        final abilityToOrder = result['ability_to_order'] as bool? ?? true;
+        final status = result['status']?.toString() ?? '';
+        
+        // If not accepted, save checking time and start timer
+        if (!abilityToOrder || status.toLowerCase() != 'accepted') {
+          final now = DateTime.now();
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString('lastChecking', now.toIso8601String());
+          
+          setState(() {
+            _isChecking = true;
+            _remainingSeconds = 60;
+            _canBuy = false;
+          });
+          
+          _startCheckTimer();
+          
+          // Show modal dialog
+          _showCheckingModal();
+        } else {
+          // Accepted - create order immediately
+          // Get counterparty_id from result
+          final counterpartyId = result['counterparty_id']?.toString();
+          
+          // Prepare product list for order creation (same as schedule calculation)
+          List<Map<String, dynamic>> orderProductList;
+          
+          if (_isSimpleMode) {
+            // Simple mode - create product list without tariff_id and advance_payment
+            orderProductList = <Map<String, dynamic>>[];
+            for (final item in cartItems) {
+              final productId = item['id'] is int 
+                  ? item['id'] 
+                  : int.tryParse(item['id'].toString()) ?? item['id'];
+              final quantity = item['quantity'] is int 
+                  ? item['quantity'] 
+                  : int.tryParse(item['quantity'].toString()) ?? item['quantity'];
+              
+              final productItem = <String, dynamic>{
+                'product_id': productId,
+                'quantity': quantity,
+              };
+              if (item['variation_id'] != null) {
+                final variationId = item['variation_id'] is int 
+                    ? item['variation_id'] 
+                    : int.tryParse(item['variation_id'].toString());
+                if (variationId != null) {
+                  productItem['variation_id'] = variationId;
+                }
+              }
+              orderProductList.add(productItem);
+            }
+            
+            // Create order with mode 1
+            final orderResult = await OrderServices.createOrder(
+              calculationMode: 1,
+              totalAdvancePayment: _globalDownPayment,
+              tariffId: int.tryParse(_selectedGlobalTariff?['id'].toString() ?? ''),
+              counterpartyId: counterpartyId,
+              productList: orderProductList,
+            );
+            
+            if (orderResult != null) {
+              // Order created successfully
+              // Get order ID from response
+              final orderId = orderResult['id'] ?? orderResult['order_id'];
+              
+              // Stop timer and clear checking state
+              _checkTimer?.cancel();
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.remove('lastChecking');
+              
+              // Save order ID and delivery status to localStorage
+              if (orderId != null) {
+                await prefs.setInt('lastOrderedId', orderId is int ? orderId : int.tryParse(orderId.toString()) ?? 0);
+              }
+              await prefs.setBool('notEnteredDelivery', true);
+              
+              // Clear cart after successful order
+              await CartService.clearCart();
+              
+              // Clear payment schedule and state
+              await _clearPaymentSchedule();
+              
+              // Clear down payment and tariff selections
+              _globalDownPayment = 0.0;
+              _globalDownPaymentController.clear();
+              _selectedGlobalTariff = null;
+              _itemDownPayments.clear();
+              _itemTariffs.clear();
+              
+              // Update state before loading cart items
+              setState(() {
+                _canBuy = true;
+                _isChecking = false;
+                _remainingSeconds = 0;
+                _isProcessingOrder = false;
+              });
+              
+              // Load cart items (will be empty now)
+              // Note: _loadCartItems will call _loadPaymentSchedule, but since we cleared storage,
+              // it won't restore old values
+              await _loadCartItems();
+              
+              // Ensure state is still cleared after loading (in case _loadPaymentSchedule tried to restore)
+              if (mounted) {
+                setState(() {
+                  _globalDownPayment = 0.0;
+                  if (_globalDownPaymentController.text.isNotEmpty) {
+                    _globalDownPaymentController.clear();
+                  }
+                  _selectedGlobalTariff = null;
+                  _itemDownPayments.clear();
+                  _itemTariffs.clear();
+                });
+              }
+              
+              if (mounted) {
+                // Navigate to order address page
+                Navigator.of(context).pushNamed('/order-address');
+              }
+            } else {
+              // Order creation failed
+          await _savePaymentSchedule(result);
+              setState(() {
+                _canBuy = true;
+                _isChecking = false;
+                _isProcessingOrder = false;
+              });
+              if (mounted) {
+                CustomToast.show(
+                  context,
+                  message: 'Ошибка при создании заказа. Попробуйте снова.',
+                  isSuccess: false,
+                );
+              }
+            }
+          } else {
+            // Complex mode - use product list with tariff_id and advance_payment
+            orderProductList = <Map<String, dynamic>>[];
+            for (final item in cartItems) {
+              final uniqueId = item['uniqueId'] as String;
+              final tariff = _itemTariffs[uniqueId];
+              final downPayment = _itemDownPayments[uniqueId] ?? 0.0;
+              
+              final productId = item['id'] is int 
+                  ? item['id'] 
+                  : int.tryParse(item['id'].toString()) ?? item['id'];
+              final quantity = item['quantity'] is int 
+                  ? item['quantity'] 
+                  : int.tryParse(item['quantity'].toString()) ?? item['quantity'];
+              final tariffId = tariff?['id'] != null
+                  ? (tariff!['id'] is int 
+                      ? tariff['id'] as int
+                      : int.tryParse(tariff['id'].toString()))
+                  : null;
+              final advancePayment = downPayment is int 
+                  ? downPayment 
+                  : downPayment.toInt();
+              
+              final productItem = <String, dynamic>{
+                'product_id': productId,
+                'quantity': quantity,
+                'tariff_id': tariffId,
+                'advance_payment': advancePayment,
+              };
+              if (item['variation_id'] != null) {
+                final variationId = item['variation_id'] is int 
+                    ? item['variation_id'] 
+                    : int.tryParse(item['variation_id'].toString());
+                if (variationId != null) {
+                  productItem['variation_id'] = variationId;
+                }
+              }
+              orderProductList.add(productItem);
+            }
+            
+            // Create order with mode 2
+            final orderResult = await OrderServices.createOrder(
+              calculationMode: 2,
+              productList: orderProductList,
+            );
+            
+            if (orderResult != null) {
+              // Order created successfully
+              // Get order ID from response
+              final orderId = orderResult['id'] ?? orderResult['order_id'];
+              
+              // Stop timer and clear checking state
+              _checkTimer?.cancel();
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.remove('lastChecking');
+              
+              // Save order ID and delivery status to localStorage
+              if (orderId != null) {
+                await prefs.setInt('lastOrderedId', orderId is int ? orderId : int.tryParse(orderId.toString()) ?? 0);
+              }
+              await prefs.setBool('notEnteredDelivery', true);
+              
+              // Clear cart after successful order
+              await CartService.clearCart();
+              
+              // Clear payment schedule and state
+              await _clearPaymentSchedule();
+              
+              // Clear down payment and tariff selections
+              _globalDownPayment = 0.0;
+              _globalDownPaymentController.clear();
+              _selectedGlobalTariff = null;
+              _itemDownPayments.clear();
+              _itemTariffs.clear();
+              
+              // Update state before loading cart items
+          setState(() {
+            _canBuy = true;
+            _isChecking = false;
+                _remainingSeconds = 0;
+                _isProcessingOrder = false;
+          });
+          
+              // Load cart items (will be empty now)
+              // Note: _loadCartItems will call _loadPaymentSchedule, but since we cleared storage,
+              // it won't restore old values
+              await _loadCartItems();
+              
+              // Ensure state is still cleared after loading (in case _loadPaymentSchedule tried to restore)
+              if (mounted) {
+                setState(() {
+                  _globalDownPayment = 0.0;
+                  if (_globalDownPaymentController.text.isNotEmpty) {
+                    _globalDownPaymentController.clear();
+                  }
+                  _selectedGlobalTariff = null;
+                  _itemDownPayments.clear();
+                  _itemTariffs.clear();
+                });
+              }
+              
+              if (mounted) {
+                // Navigate to order address page
+                Navigator.of(context).pushNamed('/order-address');
+              }
+            } else {
+              // Order creation failed
+              await _savePaymentSchedule(result);
+              setState(() {
+                _canBuy = true;
+                _isChecking = false;
+                _isProcessingOrder = false;
+              });
+              if (mounted) {
+          CustomToast.show(
+            context,
+                  message: 'Ошибка при создании заказа. Попробуйте снова.',
+                  isSuccess: false,
+          );
+              }
+            }
+          }
+        }
+        
+        // Save payment schedule to local storage (for checking case)
+        if (!abilityToOrder || status.toLowerCase() != 'accepted') {
+          await _savePaymentSchedule(result);
+        }
+        
+      } else {
+        print('❌ Payment schedule calculation failed');
+        setState(() {
+          _canBuy = true; // Allow retry
+          _isChecking = false;
+        });
+        CustomToast.show(
+          context,
+          message: 'Ошибка при расчете графика платежей',
+          isSuccess: false,
+        );
+      }
+
     } catch (e) {
+      print('❌ Error in _handlePlaceOrder: $e');
+      setState(() {
+        _canBuy = true; // Allow retry on error
+        _isChecking = false;
+      });
       CustomToast.show(
         context,
         message: 'Произошла ошибка: ${e.toString()}',
@@ -1318,7 +2409,18 @@ class _CartPageState extends State<CartPage>
   Widget _buildComplexModeItemFields(Map<String, dynamic> item, Color textColor, Color borderColor) {
     final uniqueId = item['uniqueId'] as String;
     final currentDownPayment = _itemDownPayments[uniqueId] ?? 0.0;
-    final currentTariff = _itemTariffs[uniqueId];
+    var currentTariff = _itemTariffs[uniqueId];
+    
+    // Set default tariff to first one from response if not set
+    if (currentTariff == null && _tariffs.isNotEmpty) {
+      currentTariff = _tariffs.first;
+      _itemTariffs[uniqueId] = currentTariff;
+    }
+    
+    // Create controller for this specific item
+    final controller = TextEditingController(
+      text: currentDownPayment == 0 ? '' : currentDownPayment.toInt().toString(),
+    );
     
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1333,15 +2435,29 @@ class _CartPageState extends State<CartPage>
           ),
         ),
         SizedBox(height: 8.h),
-        Container(
+        Builder(
+          builder: (context) {
+
+            final isNoInstallment = currentTariff != null && 
+                (currentTariff['payments_count'] == 0 || 
+                 currentTariff['name']?.toString().toLowerCase() == 'no installment' ||
+                 (currentTariff['coefficient'] as num?)?.toDouble() == 1.0);
+            
+            return Container(
           width: double.infinity,
           decoration: BoxDecoration(
             color: Colors.transparent,
-            border: Border.all(color: borderColor, width: 1),
+                border: Border.all(
+                  color: isNoInstallment 
+                      ? borderColor.withOpacity(0.3) 
+                      : borderColor, 
+                  width: 1
+                ),
             borderRadius: BorderRadius.circular(12.r),
           ),
           child: TextFormField(
-            initialValue: currentDownPayment == 0.0 ? '' : currentDownPayment.toInt().toString(),
+                enabled: !isNoInstallment,
+            controller: controller,
             keyboardType: TextInputType.number,
             inputFormatters: [
               FilteringTextInputFormatter.digitsOnly,
@@ -1349,7 +2465,9 @@ class _CartPageState extends State<CartPage>
             ],
             textAlign: TextAlign.center,
             style: GoogleFonts.poppins(
-              color: textColor,
+                  color: isNoInstallment 
+                      ? textColor.withOpacity(0.5) 
+                      : textColor,
               fontSize: 14.sp,
               fontWeight: FontWeight.w500,
             ),
@@ -1363,24 +2481,44 @@ class _CartPageState extends State<CartPage>
               ),
               prefixText: '\$',
               prefixStyle: GoogleFonts.poppins(
-                color: textColor,
+                    color: isNoInstallment 
+                        ? textColor.withOpacity(0.5) 
+                        : textColor,
                 fontSize: 14.sp,
                 fontWeight: FontWeight.w500,
               ),
             ),
+            onTapOutside: (event) {
+              // Close keyboard when tapping outside
+              FocusScope.of(context).unfocus();
+            },
             onChanged: (value) {
+                  if (isNoInstallment) return;
               final cleanValue = value.replaceAll(RegExp(r'[^\d]'), '');
               final intValue = cleanValue.isEmpty ? 0 : int.tryParse(cleanValue) ?? 0;
               
-              // Get product price and set as maximum
-              final productPrice = (_parsePriceValue(item['price']) ?? 0).toInt();
-              final clampedValue = intValue.clamp(0, productPrice);
+              // Get total item price (price * quantity)
+              final productPrice = (_parsePriceValue(item['price']) ?? 0);
+              final quantity = item['quantity'] as int? ?? 1;
+              final totalItemPrice = (productPrice * quantity).toInt();
+              final clampedValue = intValue.clamp(0, totalItemPrice);
               
               setState(() {
                 _itemDownPayments[uniqueId] = clampedValue.toDouble();
               });
+              
+              // Update controller if value was clamped
+              if (clampedValue != intValue) {
+                final newText = clampedValue == 0 ? '' : clampedValue.toString();
+                controller.value = controller.value.copyWith(
+                  text: newText,
+                  selection: TextSelection.collapsed(offset: newText.length),
+                );
+              }
             },
           ),
+            );
+          },
         ),
         
         SizedBox(height: 16.h),
@@ -1410,7 +2548,7 @@ class _CartPageState extends State<CartPage>
               children: [
                 Text(
                   currentTariff != null 
-                      ? _formatTariffName(currentTariff['name'] ?? '')
+                      ? (currentTariff['name'] ?? '')
                       : 'Выберите срок',
                   style: GoogleFonts.poppins(
                     fontSize: 14.sp,
@@ -1513,9 +2651,17 @@ class _CartPageState extends State<CartPage>
                                   currentTariff['id'] == tariff['id'];
                               
                               return GestureDetector(
-                                onTap: () {
+                                onTap: () async {
+                                  // Stop timer if tariff changes
+                                  _checkTimer?.cancel();
+                                  final prefs = await SharedPreferences.getInstance();
+                                  await prefs.remove('lastChecking');
+                                  
                                   setState(() {
                                     _itemTariffs[uniqueId] = tariff;
+                                    _isChecking = false;
+                                    _canBuy = true;
+                                    _remainingSeconds = 0;
                                   });
                                   Navigator.of(dialogContext).pop();
                                 },
@@ -1540,7 +2686,7 @@ class _CartPageState extends State<CartPage>
                                     children: [
                                       Expanded(
                                         child: Text(
-                                          _formatTariffName(tariff['name'] ?? ''),
+                                          tariff['name'] ?? '',
                                           style: GoogleFonts.poppins(
                                             fontSize: 16.sp,
                                             fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
@@ -1573,12 +2719,124 @@ class _CartPageState extends State<CartPage>
     );
   }
 
+  Future<void> _calculateSchedule() async {
+    try {
+      if (_isSimpleMode) {
+        // Simple mode (Mode 1)
+        final tariffId = _selectedGlobalTariff?['id'];
+        if (tariffId == null) {
+          CustomToast.show(
+            context,
+            message: 'Выберите срок рассрочки',
+            isSuccess: false,
+          );
+          return;
+        }
+
+        final result = await ProductServices.calculateSchedule(
+          calculationMode: 1,
+          tariffId: int.tryParse(tariffId.toString()),
+          totalAdvancePayment: _globalDownPayment,
+        );
+
+        if (result != null) {
+          print('✅ Simple mode calculation result: $result');
+          // Handle the result here
+        } else {
+          CustomToast.show(
+            context,
+            message: 'Ошибка при расчете графика',
+            isSuccess: false,
+          );
+        }
+      } else {
+        // Complex mode (Mode 2)
+        final productList = <Map<String, dynamic>>[];
+        
+        for (final item in cartItems) {
+          final uniqueId = item['uniqueId'] as String;
+          final tariff = _itemTariffs[uniqueId];
+          final downPayment = _itemDownPayments[uniqueId] ?? 0.0;
+          
+          if (tariff == null) {
+            CustomToast.show(
+              context,
+              message: 'Выберите срок рассрочки для всех товаров',
+              isSuccess: false,
+            );
+            return;
+          }
+
+          // Convert product_id to int
+          final productId = item['id'] is int 
+              ? item['id'] 
+              : int.tryParse(item['id'].toString()) ?? item['id'];
+          
+          // Convert quantity to int
+          final quantity = item['quantity'] is int 
+              ? item['quantity'] 
+              : int.tryParse(item['quantity'].toString()) ?? item['quantity'];
+          
+          // Convert tariff_id to int
+          final tariffId = tariff['id'] is int 
+              ? tariff['id'] 
+              : int.tryParse(tariff['id'].toString()) ?? tariff['id'];
+          
+          // Convert advance_payment to int
+          final advancePayment = downPayment is int 
+              ? downPayment 
+              : downPayment.toInt();
+          
+          final productItem = <String, dynamic>{
+            'product_id': productId,
+            'quantity': quantity,
+            'tariff_id': tariffId,
+            'advance_payment': advancePayment,
+          };
+          // Add variation_id only if it exists and is not null
+          if (item['variation_id'] != null) {
+            final variationId = item['variation_id'] is int 
+                ? item['variation_id'] 
+                : int.tryParse(item['variation_id'].toString());
+            if (variationId != null) {
+              productItem['variation_id'] = variationId;
+            }
+          }
+          productList.add(productItem);
+        }
+
+        final result = await ProductServices.calculateSchedule(
+          calculationMode: 2,
+          productList: productList,
+        );
+
+        if (result != null) {
+          print('✅ Complex mode calculation result: $result');
+          // Handle the result here
+        } else {
+          CustomToast.show(
+            context,
+            message: 'Ошибка при расчете графика',
+            isSuccess: false,
+          );
+        }
+      }
+    } catch (e) {
+      print('❌ Error in _calculateSchedule: $e');
+      CustomToast.show(
+        context,
+        message: 'Произошла ошибка: ${e.toString()}',
+        isSuccess: false,
+      );
+    }
+  }
+
   String _getSelectedTariffName() {
     if (_selectedGlobalTariff == null || _tariffs.isEmpty) {
       return 'Выберите срок';
     }
     
-    return _formatTariffName(_selectedGlobalTariff!['name'] ?? '');
+    return _selectedGlobalTariff!['name'] ?? '';
   }
 
   void _showGlobalTariffModal() {
@@ -1689,7 +2947,7 @@ class _CartPageState extends State<CartPage>
                                     children: [
                                       Expanded(
                                         child: Text(
-                                          _formatTariffName(tariff['name'] ?? ''),
+                                          tariff['name'] ?? '',
                                           style: GoogleFonts.poppins(
                                             fontSize: 16.sp,
                                             fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
@@ -1719,6 +2977,589 @@ class _CartPageState extends State<CartPage>
           ),
         );
       },
+    );
+  }
+
+  Widget _buildPaymentScheduleCard(Color textColor, Color cardColor) {
+    if (_paymentSchedule == null) return const SizedBox.shrink();
+    
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final monthlyPayments = _paymentSchedule!['monthly_payments'] as List? ?? [];
+    final totalEveryMonthPayment = _paymentSchedule!['total_every_month_payment'] ?? 0;
+    final totalProductsPrice = _paymentSchedule!['total_products_price'] ?? 0.0;
+    final totalAdvancePayment = _paymentSchedule!['total_advance_payment'] ?? 0.0;
+    
+    // Table colors for light/dark theme
+    final tableBgColor = isDark ? const Color(0xFF1A1A1A) : const Color(0xFFF5F5F5);
+    final tableTextColor = isDark ? Colors.white : Colors.black87;
+    final tableBorderColor = isDark ? Colors.white.withOpacity(0.2) : Colors.grey.withOpacity(0.3);
+    
+    return Container(
+      margin: EdgeInsets.only(bottom: 16.h),
+      padding: EdgeInsets.all(16.w),
+      decoration: BoxDecoration(
+        color: cardColor,
+        borderRadius: BorderRadius.circular(12.r),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'График платежей',
+            style: GoogleFonts.poppins(
+              fontSize: 18.sp,
+              fontWeight: FontWeight.w600,
+              color: textColor,
+            ),
+          ),
+          SizedBox(height: 16.h),
+          
+          // Payment schedule table
+          Container(
+            decoration: BoxDecoration(
+              color: tableBgColor,
+              borderRadius: BorderRadius.circular(16.r),
+            ),
+            padding: EdgeInsets.all(16.w),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Header row
+                Row(
+                  children: [
+                    Expanded(
+                      flex: 1,
+                      child: Text(
+                        'Месяц',
+                        style: GoogleFonts.poppins(
+                          fontSize: 16.sp,
+                          fontWeight: FontWeight.w600,
+                          color: tableTextColor,
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      flex: 2,
+                      child: Text(
+                        'Дата',
+                        style: GoogleFonts.poppins(
+                          fontSize: 16.sp,
+                          fontWeight: FontWeight.w600,
+                          color: tableTextColor,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                    Expanded(
+                      flex: 2,
+                      child: Text(
+                        'Сумма',
+                        style: GoogleFonts.poppins(
+                          fontSize: 16.sp,
+                          fontWeight: FontWeight.w600,
+                          color: tableTextColor,
+                        ),
+                        textAlign: TextAlign.right,
+                      ),
+                    ),
+                  ],
+                ),
+                
+                SizedBox(height: 16.h),
+                
+                // Payment rows
+                ...monthlyPayments.asMap().entries.map((entry) {
+                  final index = entry.key;
+                  final payment = entry.value as Map<String, dynamic>;
+                  final number = payment['number'] ?? (index + 1);
+                  final date = payment['date'] ?? '';
+                  final amount = payment['payment'] ?? 0;
+                  
+                  return Container(
+                    padding: EdgeInsets.symmetric(vertical: 12.h),
+                    decoration: BoxDecoration(
+                      border: Border(
+                        bottom: BorderSide(
+                          color: tableBorderColor,
+                          width: 1,
+                        ),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          flex: 1,
+                          child: Text(
+                            '$number',
+                            style: GoogleFonts.poppins(
+                              fontSize: 16.sp,
+                              fontWeight: FontWeight.w500,
+                              color: tableTextColor,
+                            ),
+                          ),
+                        ),
+                        Expanded(
+                          flex: 2,
+                          child: Text(
+                            date.toString(),
+                            style: GoogleFonts.poppins(
+                              fontSize: 16.sp,
+                              fontWeight: FontWeight.w500,
+                              color: tableTextColor,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                        Expanded(
+                          flex: 2,
+                          child: Text(
+                            _formatUsdAmount((amount is num ? amount.toDouble() : double.tryParse(amount.toString()) ?? 0.0)),
+                            style: GoogleFonts.poppins(
+                              fontSize: 16.sp,
+                              fontWeight: FontWeight.w500,
+                              color: tableTextColor,
+                            ),
+                            textAlign: TextAlign.right,
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }).toList(),
+              ],
+            ),
+          ),
+          
+          SizedBox(height: 16.h),
+          
+          // Total summary - separate container
+          Container(
+            // padding: EdgeInsets.all(16.w),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(16.r),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Итого к доплате:',
+                  style: GoogleFonts.poppins(
+                    fontSize: 16.sp,
+                    fontWeight: FontWeight.w600,
+                    color: textColor,
+                  ),
+                ),
+                Text(
+                  _formatUsdAmount((totalProductsPrice is num ? totalProductsPrice.toDouble() : double.tryParse(totalProductsPrice.toString()) ?? 0.0) - (totalAdvancePayment is num ? totalAdvancePayment.toDouble() : double.tryParse(totalAdvancePayment.toString()) ?? 0.0)),
+                  style: GoogleFonts.poppins(
+                    fontSize: 16.sp,
+                    fontWeight: FontWeight.w600,
+                    color: const Color(0xFF1B7EFF),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+  
+  void _showCheckingModal() {
+    if (!_isChecking) return; // Don't show if not checking
+    
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final textColor = isDark ? Colors.white : Colors.black87;
+    final cardColor = isDark ? const Color(0xFF2A2A2A) : Colors.white;
+    
+    showDialog(
+      context: context,
+      barrierDismissible: true, // Allow closing by tapping outside
+      builder: (context) => _CheckingModalDialog(
+        remainingSeconds: _remainingSeconds,
+        onTimerUpdate: () {
+          if (mounted) {
+            setState(() {});
+          }
+        },
+        textColor: textColor,
+        cardColor: cardColor,
+      ),
+    ).then((_) {
+      // When modal is closed, check if we should show it again when button is pressed
+      // This is handled in _handlePlaceOrder
+    });
+  }
+
+  void _showAdminCheckModal() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final textColor = isDark ? Colors.white : Colors.black87;
+    final cardColor = isDark ? const Color(0xFF2A2A2A) : Colors.white;
+    
+    // Start checking timer (60 seconds)
+    setState(() {
+      _isChecking = true;
+      _remainingSeconds = 60;
+    });
+    
+    // Save checking time
+    _saveCheckingTime();
+    
+    // Start timer
+    _startCheckTimer();
+    
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (context) => _AdminCheckModalDialog(
+        remainingSeconds: _remainingSeconds,
+        onTimerUpdate: () {
+          if (mounted) {
+            setState(() {});
+          }
+        },
+        textColor: textColor,
+        cardColor: cardColor,
+      ),
+    ).then((_) {
+      // When modal is closed
+    });
+  }
+}
+
+class _CheckingModalDialog extends StatefulWidget {
+  final int remainingSeconds;
+  final VoidCallback onTimerUpdate;
+  final Color textColor;
+  final Color cardColor;
+
+  const _CheckingModalDialog({
+    required this.remainingSeconds,
+    required this.onTimerUpdate,
+    required this.textColor,
+    required this.cardColor,
+  });
+
+  @override
+  State<_CheckingModalDialog> createState() => _CheckingModalDialogState();
+}
+
+class _CheckingModalDialogState extends State<_CheckingModalDialog> {
+  late int _currentSeconds;
+  Timer? _modalTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentSeconds = widget.remainingSeconds;
+    _startModalTimer();
+  }
+
+  @override
+  void didUpdateWidget(_CheckingModalDialog oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.remainingSeconds != widget.remainingSeconds) {
+      _currentSeconds = widget.remainingSeconds;
+    }
+  }
+
+  void _startModalTimer() {
+    _modalTimer?.cancel();
+    if (_currentSeconds > 0) {
+      _modalTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+        if (_currentSeconds > 0) {
+          setState(() {
+            _currentSeconds--;
+          });
+          widget.onTimerUpdate();
+        } else {
+          timer.cancel();
+          // Close modal when timer reaches 0
+          if (mounted && Navigator.of(context).canPop()) {
+            Navigator.of(context).pop();
+          }
+        }
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _modalTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final minutes = _currentSeconds ~/ 60;
+    final seconds = _currentSeconds % 60;
+    final timeString = '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+
+    return AlertDialog(
+      backgroundColor: widget.cardColor,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16.r),
+      ),
+      title: Text(
+        'Проверка заказа',
+        style: GoogleFonts.poppins(
+          fontSize: 20.sp,
+          fontWeight: FontWeight.w600,
+          color: widget.textColor,
+        ),
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Ваш запрос рассматривается администраторами.',
+            style: GoogleFonts.poppins(
+              fontSize: 16.sp,
+              color: widget.textColor,
+            ),
+          ),
+          SizedBox(height: 16.h),
+          if (_currentSeconds > 0) ...[
+            Text(
+              'Если ответ не придет, попробуйте снова через:',
+              style: GoogleFonts.poppins(
+                fontSize: 14.sp,
+                color: widget.textColor.withOpacity(0.7),
+              ),
+            ),
+            SizedBox(height: 12.h),
+            Container(
+              padding: EdgeInsets.all(16.w),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1B7EFF).withOpacity(0.1),
+                borderRadius: BorderRadius.circular(12.r),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.timer,
+                    color: const Color(0xFF1B7EFF),
+                    size: 24.w,
+                  ),
+                  SizedBox(width: 8.w),
+                  Text(
+                    timeString,
+                    style: GoogleFonts.poppins(
+                      fontSize: 24.sp,
+                      fontWeight: FontWeight.w600,
+                      color: const Color(0xFF1B7EFF),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ] else ...[
+            Text(
+              'Вы можете попробовать снова.',
+              style: GoogleFonts.poppins(
+                fontSize: 14.sp,
+                color: const Color(0xFF1B7EFF),
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () {
+            Navigator.of(context).pop();
+          },
+          child: Text(
+            'Понятно',
+            style: GoogleFonts.poppins(
+              fontSize: 16.sp,
+              fontWeight: FontWeight.w600,
+              color: const Color(0xFF1B7EFF),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _AdminCheckModalDialog extends StatefulWidget {
+  final int remainingSeconds;
+  final VoidCallback onTimerUpdate;
+  final Color textColor;
+  final Color cardColor;
+
+  const _AdminCheckModalDialog({
+    required this.remainingSeconds,
+    required this.onTimerUpdate,
+    required this.textColor,
+    required this.cardColor,
+  });
+
+  @override
+  State<_AdminCheckModalDialog> createState() => _AdminCheckModalDialogState();
+}
+
+class _AdminCheckModalDialogState extends State<_AdminCheckModalDialog> {
+  late int _currentSeconds;
+  Timer? _modalTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentSeconds = widget.remainingSeconds;
+    _startModalTimer();
+  }
+
+  @override
+  void didUpdateWidget(_AdminCheckModalDialog oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.remainingSeconds != widget.remainingSeconds) {
+      _currentSeconds = widget.remainingSeconds;
+    }
+  }
+
+  void _startModalTimer() {
+    _modalTimer?.cancel();
+    if (_currentSeconds > 0) {
+      _modalTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+        if (_currentSeconds > 0) {
+          setState(() {
+            _currentSeconds--;
+          });
+          widget.onTimerUpdate();
+        } else {
+          timer.cancel();
+          // Close modal when timer reaches 0
+          if (mounted && Navigator.of(context).canPop()) {
+            Navigator.of(context).pop();
+          }
+        }
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _modalTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final minutes = _currentSeconds ~/ 60;
+    final seconds = _currentSeconds % 60;
+    final timeString = '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+
+    return AlertDialog(
+      backgroundColor: widget.cardColor,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16.r),
+      ),
+      title: Row(
+        children: [
+          Icon(
+            Icons.info_outline,
+            color: Colors.orange,
+            size: 24.w,
+          ),
+          SizedBox(width: 12.w),
+          Expanded(
+            child: Text(
+              'Проверка заказа',
+              style: GoogleFonts.poppins(
+                fontSize: 20.sp,
+                fontWeight: FontWeight.w600,
+                color: widget.textColor,
+              ),
+            ),
+          ),
+        ],
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Администраторы проверят и подтвердят ваш заказ',
+            style: GoogleFonts.poppins(
+              fontSize: 16.sp,
+              color: widget.textColor,
+            ),
+          ),
+          SizedBox(height: 16.h),
+          if (_currentSeconds > 0) ...[
+            Text(
+              'Если ответ не придет, попробуйте снова через:',
+              style: GoogleFonts.poppins(
+                fontSize: 14.sp,
+                color: widget.textColor.withOpacity(0.7),
+              ),
+            ),
+            SizedBox(height: 12.h),
+            Container(
+              padding: EdgeInsets.all(16.w),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1B7EFF).withOpacity(0.1),
+                borderRadius: BorderRadius.circular(12.r),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.timer,
+                    color: const Color(0xFF1B7EFF),
+                    size: 24.w,
+                  ),
+                  SizedBox(width: 8.w),
+                  Text(
+                    timeString,
+                    style: GoogleFonts.poppins(
+                      fontSize: 24.sp,
+                      fontWeight: FontWeight.w600,
+                      color: const Color(0xFF1B7EFF),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ] else ...[
+            Text(
+              'Вы можете попробовать снова.',
+              style: GoogleFonts.poppins(
+                fontSize: 14.sp,
+                color: const Color(0xFF1B7EFF),
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () {
+            Navigator.of(context).pop();
+          },
+          child: Text(
+            'Понятно',
+            style: GoogleFonts.poppins(
+              fontSize: 16.sp,
+              fontWeight: FontWeight.w600,
+              color: const Color(0xFF1B7EFF),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

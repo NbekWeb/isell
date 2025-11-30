@@ -59,8 +59,8 @@
 	<key>NSCameraUsageDescription</key>
 	<string>Required for document and facial capture</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Required for showing company locations on map</string>
+		<string>Для доставки требуется доступ к вашему местоположению. Мы используем его для определения адреса доставки на карте.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>Required for showing company locations on map</string>
+		<string>Для доставки требуется доступ к вашему местоположению. Мы используем его для определения адреса доставки на карте.</string>
 	</dict>
 </plist>
