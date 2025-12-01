@@ -229,6 +229,7 @@ NwIDAQAB''';
       print('   - entryType: $entryType');
       print('   - locale: $locale');
       
+      print('🔵 [MyIdService] Invoking startMyId method channel...');
       final result = await _channel.invokeMethod<Map<dynamic, dynamic>>(
         'startMyId',
         {
@@ -245,32 +246,60 @@ NwIDAQAB''';
         },
       );
 
-      print('📥 MyID SDK Response: $result');
+      print('📥 [MyIdService] MyID SDK Response received');
+      print('   - result: $result');
+      print('   - result type: ${result.runtimeType}');
+      print('   - result is null: ${result == null}');
 
       if (result == null) {
-        print('❌ MyID SDK - No result returned');
+        print('❌ [MyIdService] MyID SDK - No result returned');
         throw MyIdException(
           code: 'UNKNOWN_ERROR',
           message: 'No result returned from MyID',
         );
       }
 
+      print('   - result keys: ${result.keys.toList()}');
+      print('   - result["success"]: ${result['success']}');
+      print('   - result["success"] type: ${result['success'].runtimeType}');
+      print('   - result["success"] == true: ${result['success'] == true}');
+      print('   - result["code"]: ${result['code']}');
+      print('   - result["message"]: ${result['message']}');
+      print('   - result["image"]: ${result['image'] != null ? "present" : "null"}');
+
+      // Helper function to safely convert code to String
+      String? safeCodeToString(dynamic code) {
+        if (code == null) return null;
+        if (code is String) return code;
+        if (code is int) return code.toString();
+        return code.toString();
+      }
+
+      // Helper function to safely convert message to String
+      String? safeMessageToString(dynamic message) {
+        if (message == null) return null;
+        if (message is String) return message;
+        return message.toString();
+      }
+
       if (result['success'] == true) {
-        print('✅ MyID SDK - Success');
+        print('✅ [MyIdService] MyID SDK - Success');
         print('   - code: ${result['code']}');
         print('   - image: ${result['image'] != null ? "present" : "null"}');
-        return MyIdResult(
-          code: result['code'] as String?,
+        final myIdResult = MyIdResult(
+          code: safeCodeToString(result['code']),
           image: result['image'] as String?,
           comparisonValue: result['comparisonValue'] as double?,
         );
+        print('✅ [MyIdService] MyIdResult created and returning');
+        return myIdResult;
       } else {
-        print('❌ MyID SDK - Error');
+        print('❌ [MyIdService] MyID SDK - Error or User Exited');
         print('   - code: ${result['code']}');
         print('   - message: ${result['message']}');
         throw MyIdException(
-          code: result['code'] as String? ?? 'UNKNOWN_ERROR',
-          message: result['message'] as String? ?? 'Unknown error occurred',
+          code: safeCodeToString(result['code']) ?? 'UNKNOWN_ERROR',
+          message: safeMessageToString(result['message']) ?? 'Unknown error occurred',
         );
       }
     } on PlatformException catch (e) {
@@ -291,8 +320,7 @@ NwIDAQAB''';
     }
   }
 
-  /// Verify MyID with backend API
-  /// GET /accounts/myid/verify/
+  
   static Future<Map<String, dynamic>?> verifyMyIdWithBackend({
     required String code,
     required String token,
@@ -324,16 +352,39 @@ NwIDAQAB''';
       final data = response.data;
       print('🔵 MyID Backend Verify Response Status: ${response.statusCode}');
       print('🔵 MyID Backend Verify Response Data: $data');
+      print('🔵 MyID Backend Verify Response Data Type: ${data.runtimeType}');
+      
+      if (data != null && data is Map) {
+        print('🔵 MyID Backend Verify Response Data Keys: ${data.keys.toList()}');
+        if (data.containsKey('success')) {
+          print('🔵 MyID Backend Verify Response Data success: ${data['success']}');
+        }
+        if (data.containsKey('tokens')) {
+          print('🔵 MyID Backend Verify Response Data has tokens');
+        }
+        if (data.containsKey('user')) {
+          print('🔵 MyID Backend Verify Response Data has user');
+        }
+      }
 
       if (response.statusCode == 200) {
+        // Check if data itself has success field
+        bool backendSuccess = true;
+        if (data != null && data is Map && data.containsKey('success')) {
+          backendSuccess = data['success'] == true || data['success'] == 'true';
+          print('🔵 MyID Backend Verify - Data has success field: ${data['success']}, backendSuccess: $backendSuccess');
+        }
+        
         return {
-          'success': true,
+          'success': backendSuccess,
           'data': data,
         };
       } else {
+        print('❌ MyID Backend Verify - Unexpected status code: ${response.statusCode}');
         return {
           'success': false,
           'error': 'Unexpected status code: ${response.statusCode}',
+          'data': data, // Still return data in case it has useful info
         };
       }
     } catch (e) {

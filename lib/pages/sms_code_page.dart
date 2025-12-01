@@ -26,6 +26,7 @@ class _SmsCodePageState extends State<SmsCodePage> {
   final List<FocusNode> _focusNodes = List.generate(4, (index) => FocusNode());
   bool _isLoading = false;
   bool _isResending = false;
+  bool _isMyIdInProgress = false; // Track if MyID verification is in progress
 
   @override
   void initState() {
@@ -75,7 +76,11 @@ class _SmsCodePageState extends State<SmsCodePage> {
   }
 
   Future<void> _verifyCode() async {
+    print('🔵 [SMS Code Page] _verifyCode called');
+    print('   - phoneNumber: ${widget.phoneNumber}');
+    
     if (!_isCodeComplete()) {
+      print('⚠️ [SMS Code Page] Code not complete');
       CustomToast.show(
         context,
         message: 'Введите полный код',
@@ -84,24 +89,49 @@ class _SmsCodePageState extends State<SmsCodePage> {
       return;
     }
 
+    final code = _getEnteredCode();
+    print('   - entered code: $code');
+    print('   - setting _isLoading to true');
+    
     setState(() {
       _isLoading = true;
     });
 
     try {
-      final code = _getEnteredCode();
+      print('🔵 [SMS Code Page] Calling AuthService.verifyCode...');
       final result = await AuthService.verifyCode(
         phoneNumber: widget.phoneNumber,
         code: code,
       );
 
+      print('📥 [SMS Code Page] AuthService.verifyCode response received');
+      print('   - result: $result');
+      print('   - result type: ${result.runtimeType}');
+
       if (result != null && result['success'] == true) {
+        print('✅ [SMS Code Page] SMS code verification SUCCESS');
         final responseData = result['data'];
+        print('   - responseData: $responseData');
+        print('   - responseData type: ${responseData.runtimeType}');
         
         // Check if data is empty - then MyID verification is required
-        if (responseData == null || 
-            (responseData is Map && responseData.isEmpty) ||
-            (responseData is Map && responseData['data'] != null && (responseData['data'] as Map).isEmpty)) {
+        bool needsMyId = false;
+        if (responseData == null) {
+          print('   - responseData is null, MyID verification needed');
+          needsMyId = true;
+        } else if (responseData is Map && responseData.isEmpty) {
+          print('   - responseData is empty Map, MyID verification needed');
+          needsMyId = true;
+        } else if (responseData is Map && responseData['data'] != null && (responseData['data'] as Map).isEmpty) {
+          print('   - responseData["data"] is empty Map, MyID verification needed');
+          needsMyId = true;
+        } else {
+          print('   - responseData contains data, no MyID verification needed');
+        }
+        
+        if (needsMyId) {
+          print('🔵 [SMS Code Page] MyID verification required, starting...');
+          print('   - _isMyIdInProgress before: $_isMyIdInProgress');
           
           CustomToast.show(
             context,
@@ -110,16 +140,22 @@ class _SmsCodePageState extends State<SmsCodePage> {
           );
           
           // Start MyID verification process
-          _startMyIdVerification();
+          await _startMyIdVerification();
+          
+          print('   - _isMyIdInProgress after _startMyIdVerification: $_isMyIdInProgress');
         } else {
+          print('✅ [SMS Code Page] Full authentication completed, saving tokens...');
           // Full authentication completed - data contains tokens
           // Save tokens and user data
           await _saveTokensFromResponse({'data': responseData});
           
           // Fetch fresh user data from API
+          print('🔵 [SMS Code Page] Fetching fresh user data from API...');
           final userResult = await UserService.getCurrentUser();
           if (userResult != null && userResult['success'] == true) {
-            print('✅ User data fetched after SMS verification');
+            print('✅ [SMS Code Page] User data fetched after SMS verification');
+          } else {
+            print('⚠️ [SMS Code Page] Failed to fetch user data');
           }
           
           CustomToast.show(
@@ -129,13 +165,18 @@ class _SmsCodePageState extends State<SmsCodePage> {
           );
 
           // Navigate to main layout (named route so theme callback works)
+          print('🚀 [SMS Code Page] Navigating to /home');
           Navigator.of(context).pushNamedAndRemoveUntil(
             '/home',
             (route) => false,
           );
+          print('✅ [SMS Code Page] Navigation completed');
         }
       } else {
+        print('❌ [SMS Code Page] SMS code verification FAILED');
         final errorMessage = result?['error'] ?? 'Неверный код';
+        print('   - errorMessage: $errorMessage');
+        
         CustomToast.show(
           context,
           message: errorMessage,
@@ -145,7 +186,11 @@ class _SmsCodePageState extends State<SmsCodePage> {
         // Clear inputs and focus first input
         _clearInputs();
       }
-    } catch (e) {
+    } catch (e, stackTrace) {
+      print('❌ [SMS Code Page] ERROR in _verifyCode');
+      print('   - error: $e');
+      print('   - stackTrace: $stackTrace');
+      
       CustomToast.show(
         context,
         message: 'Произошла ошибка при проверке кода',
@@ -154,6 +199,7 @@ class _SmsCodePageState extends State<SmsCodePage> {
       _clearInputs();
     } finally {
       if (mounted) {
+        print('🔵 [SMS Code Page] Setting _isLoading to false');
         setState(() {
           _isLoading = false;
         });
@@ -211,40 +257,172 @@ class _SmsCodePageState extends State<SmsCodePage> {
   }
 
   Future<void> _startMyIdVerification() async {
+    print('🔵 [SMS Code Page] _startMyIdVerification called');
+    print('   - _isMyIdInProgress before: $_isMyIdInProgress');
+    
+    // Prevent multiple simultaneous MyID verifications
+    if (_isMyIdInProgress) {
+      print('⚠️ [SMS Code Page] MyID verification already in progress, skipping...');
+      return;
+    }
+
+    print('🔵 [SMS Code Page] Setting _isMyIdInProgress to true');
+    setState(() {
+      _isMyIdInProgress = true;
+    });
+    print('   - _isMyIdInProgress after setState: $_isMyIdInProgress');
+
     try {
       // Step 1: Check camera permission first
+      print('🔵 [SMS Code Page] Step 1: Checking camera permission...');
       final cameraStatus = await Permission.camera.status;
+      print('   - cameraStatus: $cameraStatus');
       
       if (!cameraStatus.isGranted) {
-        // Request camera permission
-        final requestResult = await Permission.camera.request();
-        
-        if (!requestResult.isGranted) {
-          // Permission denied - SMS is correct but camera permission not granted
-          // Navigate to home page instead of staying on SMS page
-          CustomToast.show(
-            context,
-            message: 'Камера разрешение требуется для MyID. Переход на главную страницу...',
-            isSuccess: false,
-          );
+        // Check if permission is permanently denied
+        if (cameraStatus.isPermanentlyDenied) {
+          print('❌ [SMS Code Page] Camera permission permanently denied, opening settings...');
+          setState(() {
+            _isMyIdInProgress = false;
+          });
           
-          // Navigate to home page
+          // Show dialog to open settings
           if (mounted) {
-            Navigator.of(context).pushNamedAndRemoveUntil(
-              '/home',
-              (route) => false,
+            showDialog(
+              context: context,
+              builder: (BuildContext context) {
+                return AlertDialog(
+                  title: const Text('Камера разрешение требуется'),
+                  content: const Text(
+                    'Для работы MyID требуется доступ к камере. Пожалуйста, разрешите доступ к камере в настройках приложения.',
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () {
+                        Navigator.of(context).pop();
+                        setState(() {
+                          _isMyIdInProgress = false;
+                        });
+                        if (mounted) {
+                          Navigator.of(context).pushNamedAndRemoveUntil(
+                            '/home',
+                            (route) => false,
+                          );
+                        }
+                      },
+                      child: const Text('Отмена'),
+                    ),
+                    TextButton(
+                      onPressed: () async {
+                        Navigator.of(context).pop();
+                        await openAppSettings();
+                        setState(() {
+                          _isMyIdInProgress = false;
+                        });
+                        if (mounted) {
+                          Navigator.of(context).pushNamedAndRemoveUntil(
+                            '/home',
+                            (route) => false,
+                          );
+                        }
+                      },
+                      child: const Text('Настройки'),
+                    ),
+                  ],
+                );
+              },
             );
           }
           return;
         }
+        
+        print('⚠️ [SMS Code Page] Camera permission not granted, requesting...');
+        // Request camera permission
+        final requestResult = await Permission.camera.request();
+        print('   - requestResult: $requestResult');
+        
+        if (!requestResult.isGranted) {
+          print('❌ [SMS Code Page] Camera permission denied');
+          // Permission denied - SMS is correct but camera permission not granted
+          // Navigate to home page instead of staying on SMS page
+          setState(() {
+            _isMyIdInProgress = false;
+          });
+          
+          // Show better error message
+          if (mounted) {
+            showDialog(
+              context: context,
+              builder: (BuildContext context) {
+                return AlertDialog(
+                  title: const Text('Доступ к камере требуется'),
+                  content: const Text(
+                    'Для верификации через MyID требуется доступ к камере. Пожалуйста, разрешите доступ к камере в настройках приложения.',
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () {
+                        Navigator.of(context).pop();
+                        if (mounted) {
+                          Navigator.of(context).pushNamedAndRemoveUntil(
+                            '/home',
+                            (route) => false,
+                          );
+                        }
+                      },
+                      child: const Text('Отмена'),
+                    ),
+                    TextButton(
+                      onPressed: () async {
+                        Navigator.of(context).pop();
+                        await openAppSettings();
+                        if (mounted) {
+                          Navigator.of(context).pushNamedAndRemoveUntil(
+                            '/home',
+                            (route) => false,
+                          );
+                        }
+                      },
+                      child: const Text('Настройки'),
+                    ),
+                  ],
+                );
+              },
+            );
+          }
+          return;
+        }
+        print('✅ [SMS Code Page] Camera permission granted');
+        
+        // Wait a bit to ensure permission is fully processed (especially on iOS)
+        print('⏳ [SMS Code Page] Waiting 500ms for permission to be fully processed...');
+        await Future.delayed(const Duration(milliseconds: 500));
+      } else {
+        print('✅ [SMS Code Page] Camera permission already granted');
       }
       
       // Step 2: Get session ID from MyID API
+      print('🔵 [SMS Code Page] Step 2: Getting session ID from MyID API...');
       String sessionId = await MyIdService.getSessionId();
+      print('✅ [SMS Code Page] Session ID received: $sessionId');
 
       // Step 3: Start MyID SDK authentication
-      // Add a small delay to ensure permission is fully processed
-      await Future.delayed(const Duration(milliseconds: 300));
+      // Permission is already granted and processed, proceed with SDK
+      print('🔵 [SMS Code Page] Step 3: Starting MyID SDK authentication...');
+      
+      // Check if still mounted before starting MyID SDK
+      if (!mounted) {
+        print('⚠️ [SMS Code Page] Widget not mounted, stopping');
+        setState(() {
+          _isMyIdInProgress = false;
+        });
+        return;
+      }
+      
+      print('🔵 [SMS Code Page] Starting MyID SDK authentication...');
+      print('   - sessionId: $sessionId');
+      print('   - clientHashId: ${MyIdService.clientHashId}');
+      print('   - _isMyIdInProgress: $_isMyIdInProgress');
       
       final result = await MyIdService.startAuthentication(
         sessionId: sessionId,
@@ -255,13 +433,25 @@ class _SmsCodePageState extends State<SmsCodePage> {
         locale: 'russian',
       );
 
+      print('📥 [SMS Code Page] MyID SDK result received');
+      print('   - result.code: ${result.code}');
+      print('   - result.image: ${result.image != null ? "present" : "null"}');
+      print('   - result.comparisonValue: ${result.comparisonValue}');
+
       // Step 4: Handle MyID SDK result
       if (result.code != null) {
+        print('✅ [SMS Code Page] MyID SDK returned code, calling backend verify...');
         
         // Step 5: Call backend MyID verify API
         await _verifyMyIdWithBackend(result.code!, result.image, result.comparisonValue);
         
       } else {
+        print('⚠️ [SMS Code Page] MyID SDK did not return code (user cancelled?)');
+        setState(() {
+          _isMyIdInProgress = false;
+        });
+        print('   - _isMyIdInProgress set to false');
+        
         CustomToast.show(
           context,
           message: 'MyID верификация отменена',
@@ -269,13 +459,26 @@ class _SmsCodePageState extends State<SmsCodePage> {
         );
       }
     } on MyIdException catch (e) {
+      print('❌ [SMS Code Page] MyIdException caught in _startMyIdVerification');
+      print('   - code: ${e.code}');
+      print('   - message: ${e.message}');
+      print('   - setting _isMyIdInProgress to false');
+      
+      setState(() {
+        _isMyIdInProgress = false;
+      });
+      print('   - _isMyIdInProgress after setState: $_isMyIdInProgress');
+      
       // Handle specific MyID exceptions
       if (e.code == 'CAMERA_PERMISSION_DENIED') {
+        print('🔵 [SMS Code Page] Camera permission denied exception');
         // Camera permission was denied during SDK start
         // Check if we can request it again
         final cameraStatus = await Permission.camera.status;
+        print('   - cameraStatus: $cameraStatus');
         
         if (cameraStatus.isPermanentlyDenied) {
+          print('❌ [SMS Code Page] Camera permission permanently denied, navigating to home');
           // Permission permanently denied - go to home page
           CustomToast.show(
             context,
@@ -290,6 +493,7 @@ class _SmsCodePageState extends State<SmsCodePage> {
             );
           }
         } else {
+          print('🔄 [SMS Code Page] Camera permission can be requested, retrying...');
           // Permission can be requested - wait a bit and retry
           CustomToast.show(
             context,
@@ -299,18 +503,39 @@ class _SmsCodePageState extends State<SmsCodePage> {
           
           // Wait for permission to be granted and retry
           await Future.delayed(const Duration(milliseconds: 500));
-          await _startMyIdVerification();
+          
+          // Check if still mounted before retrying
+          if (mounted) {
+            print('🔄 [SMS Code Page] Retrying _startMyIdVerification after permission request');
+            await _startMyIdVerification();
+          } else {
+            print('⚠️ [SMS Code Page] Widget not mounted, cannot retry');
+          }
         }
       } else {
+        print('❌ [SMS Code Page] Other MyIdException: ${e.message}');
+        // Show only the message without prefix
         CustomToast.show(
           context,
-          message: 'Ошибка MyID верификации: ${e.message}',
+          message: e.message,
           isSuccess: false,
         );
       }
-    } catch (e) {
+    } catch (e, stackTrace) {
+      print('❌ [SMS Code Page] General exception caught in _startMyIdVerification');
+      print('   - error: $e');
+      print('   - error type: ${e.runtimeType}');
+      print('   - stackTrace: $stackTrace');
+      print('   - setting _isMyIdInProgress to false');
+      
+      setState(() {
+        _isMyIdInProgress = false;
+      });
+      print('   - _isMyIdInProgress after setState: $_isMyIdInProgress');
+      
       // Check if it's a PlatformException with CAMERA_PERMISSION_DENIED
       if (e is PlatformException && e.code == 'CAMERA_PERMISSION_DENIED') {
+        print('🔵 [SMS Code Page] PlatformException with CAMERA_PERMISSION_DENIED');
         // Wait a bit for permission to be processed, then retry
         CustomToast.show(
           context,
@@ -320,12 +545,22 @@ class _SmsCodePageState extends State<SmsCodePage> {
         
         await Future.delayed(const Duration(milliseconds: 500));
         
+        // Check if still mounted before proceeding
+        if (!mounted) {
+          print('⚠️ [SMS Code Page] Widget not mounted, returning');
+          return;
+        }
+        
         // Check permission status and retry
         final cameraStatus = await Permission.camera.status;
+        print('   - cameraStatus after delay: $cameraStatus');
+        
         if (cameraStatus.isGranted) {
+          print('✅ [SMS Code Page] Camera permission granted, retrying...');
           // Permission granted, retry
           await _startMyIdVerification();
         } else if (cameraStatus.isPermanentlyDenied) {
+          print('❌ [SMS Code Page] Camera permission permanently denied, navigating to home');
           // Permission permanently denied - go to home page
           CustomToast.show(
             context,
@@ -340,36 +575,77 @@ class _SmsCodePageState extends State<SmsCodePage> {
             );
           }
         } else {
+          print('🔄 [SMS Code Page] Requesting camera permission again...');
           // Try requesting again
           final requestResult = await Permission.camera.request();
-          if (requestResult.isGranted) {
+          print('   - requestResult: $requestResult');
+          
+          if (requestResult.isGranted && mounted) {
+            print('✅ [SMS Code Page] Camera permission granted after request, retrying...');
             await _startMyIdVerification();
-          } else {
+          } else if (mounted) {
+            print('❌ [SMS Code Page] Camera permission still denied, navigating to home');
             // Still denied - go to home page
-            if (mounted) {
-              Navigator.of(context).pushNamedAndRemoveUntil(
-                '/home',
-                (route) => false,
-              );
-            }
+            Navigator.of(context).pushNamedAndRemoveUntil(
+              '/home',
+              (route) => false,
+            );
           }
         }
       } else {
-      CustomToast.show(
-        context,
-        message: 'Ошибка MyID верификации: ${e.toString()}',
-        isSuccess: false,
-      );
+        print('❌ [SMS Code Page] Other exception: ${e.toString()}');
+        // Extract only the message part, not the full exception string
+        String errorMessage = 'Неизвестная ошибка';
+        if (e is MyIdException) {
+          errorMessage = e.message;
+        } else if (e is PlatformException) {
+          errorMessage = e.message ?? e.code;
+        } else {
+          // Try to extract message from toString if it contains "message:"
+          final errorStr = e.toString();
+          if (errorStr.contains('message:')) {
+            final match = RegExp(r'message:\s*([^,)]+)').firstMatch(errorStr);
+            if (match != null) {
+              errorMessage = match.group(1)?.trim() ?? errorStr;
+            } else {
+              errorMessage = errorStr;
+            }
+          } else {
+            errorMessage = errorStr;
+          }
+        }
+        CustomToast.show(
+          context,
+          message: errorMessage,
+          isSuccess: false,
+        );
       }
     }
   }
 
   Future<void> _verifyMyIdWithBackend(String code, String? image, double? comparisonValue) async {
+    print('🔵 [SMS Code Page] _verifyMyIdWithBackend called');
+    print('   - code: $code');
+    print('   - image: ${image != null ? "present (${image.length} chars)" : "null"}');
+    print('   - comparisonValue: $comparisonValue');
+    print('   - _isMyIdInProgress: $_isMyIdInProgress');
+    
     try {
+      // Check if still mounted
+      if (!mounted) {
+        print('⚠️ [SMS Code Page] Widget not mounted, stopping verification');
+        setState(() {
+          _isMyIdInProgress = false;
+        });
+        return;
+      }
       
+      print('🔵 [SMS Code Page] Getting access token...');
       // Get access token for the API call
       final accessToken = await MyIdService.getAccessToken();
+      print('✅ [SMS Code Page] Access token received: ${accessToken.substring(0, 20)}...');
       
+      print('🔵 [SMS Code Page] Calling MyID verify endpoint...');
       // Call the MyID verify endpoint
       final response = await MyIdService.verifyMyIdWithBackend(
         code: code,
@@ -377,39 +653,187 @@ class _SmsCodePageState extends State<SmsCodePage> {
         phoneNumber: widget.phoneNumber,
       );
       
+      print('📥 [SMS Code Page] MyID verify response received');
+      print('   - response: $response');
+      print('   - response type: ${response.runtimeType}');
+      print('   - response is null: ${response == null}');
       
-      if (response != null && response['success'] == true) {
+      if (response != null) {
+        print('   - response keys: ${response.keys.toList()}');
+        print('   - success: ${response['success']}');
+        print('   - success type: ${response['success'].runtimeType}');
+        print('   - success == true: ${response['success'] == true}');
+        print('   - success == "true": ${response['success'] == "true"}');
+        print('   - data: ${response['data']}');
+        print('   - data type: ${response['data'].runtimeType}');
+        print('   - error: ${response['error']}');
+        
+        // Check if data exists and has tokens
+        if (response['data'] != null && response['data'] is Map) {
+          final data = response['data'] as Map;
+          print('   - data keys: ${data.keys.toList()}');
+          if (data.containsKey('tokens')) {
+            print('   - tokens found: ${data['tokens']}');
+          }
+          if (data.containsKey('user')) {
+            print('   - user found: ${data['user']}');
+          }
+        }
+      }
+      
+      // Check if still mounted after API call
+      if (!mounted) {
+        print('⚠️ [SMS Code Page] Widget not mounted after API call, stopping');
+        setState(() {
+          _isMyIdInProgress = false;
+        });
+        return;
+      }
+      
+      // Check success condition more carefully
+      final isSuccess = response != null && 
+                       (response['success'] == true || 
+                        response['success'] == 'true' ||
+                        (response['success'] is bool && response['success'] == true));
+      
+      print('   - isSuccess calculated: $isSuccess');
+      
+      if (isSuccess) {
+        print('✅ [SMS Code Page] MyID verification SUCCESS');
+        print('   - Saving tokens and user data...');
+        
         // Success - save tokens and user data
         await _saveTokensFromResponse(response);
         
+        print('✅ [SMS Code Page] Tokens and user data saved');
+        print('   - Setting _isMyIdInProgress to false');
+        
+        setState(() {
+          _isMyIdInProgress = false;
+        });
+        
+        print('   - _isMyIdInProgress after setState: $_isMyIdInProgress');
+        
+        // Ensure we're back on SMS page (in case SDK navigated away)
+        // Wait a bit for any navigation transitions to complete
+        print('⏳ [SMS Code Page] Waiting 500ms for navigation transitions...');
+        await Future.delayed(const Duration(milliseconds: 500));
+        
+        if (!mounted) {
+          print('⚠️ [SMS Code Page] Widget not mounted after delay, returning');
+          return;
+        }
+        
+        print('🔵 [SMS Code Page] Showing success toast...');
         CustomToast.show(
           context,
           message: 'MyID верификация успешна! Авторизация завершена',
           isSuccess: true,
         );
         
-        // Navigate to main layout (with bottom navigation, using named route)
-        Navigator.of(context).pushNamedAndRemoveUntil(
-          '/home',
-          (route) => false,
-        );
-      } else {
-        // Failure - retry MyID verification
-        final errorMessage = response?['error'] ?? 'Ошибка верификации MyID';
-        print('❌ MyID verification failed: $errorMessage');
-        
-        CustomToast.show(
-          context,
-          message: 'Ошибка верификации. Повторная попытка...',
-          isSuccess: false,
-        );
-        
-        // Retry MyID verification process
+        // Wait a bit more to show the success message, then navigate to home
+        print('⏳ [SMS Code Page] Waiting 1 second before navigation...');
         await Future.delayed(const Duration(seconds: 1));
-        _startMyIdVerification();
+        
+        // Navigate to main layout (with bottom navigation, using named route)
+        // Only navigate if still mounted
+        if (mounted) {
+          print('🚀 [SMS Code Page] Navigating to /home');
+          Navigator.of(context).pushNamedAndRemoveUntil(
+            '/home',
+            (route) => false,
+          );
+          print('✅ [SMS Code Page] Navigation completed');
+        } else {
+          print('⚠️ [SMS Code Page] Widget not mounted, cannot navigate');
+        }
+      } else {
+        // Failure - check if we should retry or just show error
+        final errorMessage = response?['error'] ?? 'Ошибка верификации MyID';
+        print('❌ [SMS Code Page] MyID verification FAILED or response invalid');
+        print('   - errorMessage: $errorMessage');
+        print('   - response: $response');
+        print('   - response is null: ${response == null}');
+        
+        // Check if response has data even though success is false
+        // Sometimes backend returns data even with success=false
+        bool hasValidData = false;
+        if (response != null && response['data'] != null) {
+          final data = response['data'];
+          if (data is Map) {
+            // Check if data contains tokens or user info
+            if (data.containsKey('tokens') || data.containsKey('user')) {
+              print('   - ⚠️ Response has data despite success=false, trying to save...');
+              hasValidData = true;
+              try {
+                await _saveTokensFromResponse(response);
+                print('   - ✅ Data saved successfully despite success=false');
+                
+                setState(() {
+                  _isMyIdInProgress = false;
+                });
+                
+                CustomToast.show(
+                  context,
+                  message: 'MyID верификация завершена',
+                  isSuccess: true,
+                );
+                
+                await Future.delayed(const Duration(milliseconds: 500));
+                
+                if (mounted) {
+                  Navigator.of(context).pushNamedAndRemoveUntil(
+                    '/home',
+                    (route) => false,
+                  );
+                }
+                return; // Exit early, don't retry
+              } catch (e) {
+                print('   - ❌ Error saving data: $e');
+                hasValidData = false;
+              }
+            }
+          }
+        }
+        
+        if (!hasValidData) {
+          // Only retry if we don't have valid data
+          setState(() {
+            _isMyIdInProgress = false;
+          });
+          
+          print('   - _isMyIdInProgress set to false');
+          
+          CustomToast.show(
+            context,
+            message: 'Ошибка верификации. Повторная попытка...',
+            isSuccess: false,
+          );
+          
+          // Retry MyID verification process
+          print('⏳ [SMS Code Page] Waiting 1 second before retry...');
+          await Future.delayed(const Duration(seconds: 1));
+          
+          // Only retry if still mounted
+          if (mounted) {
+            print('🔄 [SMS Code Page] Retrying MyID verification...');
+            await _startMyIdVerification();
+          } else {
+            print('⚠️ [SMS Code Page] Widget not mounted, cannot retry');
+          }
+        }
       }
-    } catch (e) {
-      print('❌ Error in backend MyID verification: $e');
+    } catch (e, stackTrace) {
+      print('❌ [SMS Code Page] ERROR in backend MyID verification');
+      print('   - error: $e');
+      print('   - stackTrace: $stackTrace');
+      
+      setState(() {
+        _isMyIdInProgress = false;
+      });
+      
+      print('   - _isMyIdInProgress set to false');
+      
       CustomToast.show(
         context,
         message: 'Ошибка сервера. Повторная попытка...',
@@ -417,39 +841,96 @@ class _SmsCodePageState extends State<SmsCodePage> {
       );
       
       // Retry MyID verification on error
+      print('⏳ [SMS Code Page] Waiting 1 second before retry after error...');
       await Future.delayed(const Duration(seconds: 1));
-      _startMyIdVerification();
+      
+      // Only retry if still mounted
+      if (mounted) {
+        print('🔄 [SMS Code Page] Retrying MyID verification after error...');
+        await _startMyIdVerification();
+      } else {
+        print('⚠️ [SMS Code Page] Widget not mounted, cannot retry after error');
+      }
     }
   }
 
   Future<void> _saveTokensFromResponse(Map<String, dynamic> response) async {
+    print('🔵 [SMS Code Page] _saveTokensFromResponse called');
+    print('   - response keys: ${response.keys.toList()}');
+    
     try {
       final data = response['data'];
+      print('   - data type: ${data.runtimeType}');
+      print('   - data: $data');
+      
       if (data is Map) {
+        print('   - data is Map, processing...');
+        
+        // Check if tokens and user are in data['data'] (nested structure)
+        Map<String, dynamic>? actualData = data as Map<String, dynamic>?;
+        if (data.containsKey('data') && data['data'] is Map) {
+          print('   - Found nested data structure, using data["data"]');
+          print('   - data["data"]: ${data['data']}');
+          actualData = data['data'] as Map<String, dynamic>?;
+        }
+        
         // Save tokens
-        if (data.containsKey('tokens') && data['tokens'] is Map) {
-          final tokens = data['tokens'] as Map;
+        if (actualData != null && actualData.containsKey('tokens') && actualData['tokens'] is Map) {
+          print('   - tokens found, saving...');
+          final tokens = actualData['tokens'] as Map;
+          print('   - tokens keys: ${tokens.keys.toList()}');
           final prefs = await SharedPreferences.getInstance();
           
           if (tokens.containsKey('access')) {
-            await prefs.setString('accessToken', tokens['access'].toString());
-            print('✅ Access token saved: ${tokens['access'].toString().substring(0, 20)}...');
-        }
+            final accessToken = tokens['access'].toString();
+            await prefs.setString('accessToken', accessToken);
+            print('✅ [SMS Code Page] Access token saved: ${accessToken.substring(0, 20)}...');
+          } else {
+            print('⚠️ [SMS Code Page] Access token not found in tokens');
+          }
           
           if (tokens.containsKey('refresh')) {
-            await prefs.setString('refreshToken', tokens['refresh'].toString());
-            print('✅ Refresh token saved');
+            final refreshToken = tokens['refresh'].toString();
+            await prefs.setString('refreshToken', refreshToken);
+            print('✅ [SMS Code Page] Refresh token saved: ${refreshToken.substring(0, 20)}...');
+          } else {
+            print('⚠️ [SMS Code Page] Refresh token not found in tokens');
+          }
+        } else {
+          print('⚠️ [SMS Code Page] Tokens not found or not a Map');
+          if (actualData != null) {
+            print('   - actualData.containsKey("tokens"): ${actualData.containsKey('tokens')}');
+            if (actualData.containsKey('tokens')) {
+              print('   - actualData["tokens"] type: ${actualData['tokens'].runtimeType}');
+            }
           }
         }
         
         // Save user data
-        if (data.containsKey('user') && data['user'] is Map) {
-          final userData = data['user'] as Map;
+        if (actualData != null && actualData.containsKey('user') && actualData['user'] is Map) {
+          print('   - user data found, saving...');
+          final userData = actualData['user'] as Map;
+          print('   - user data keys: ${userData.keys.toList()}');
           await UserService.saveUserData(userData);
+          print('✅ [SMS Code Page] User data saved');
+        } else {
+          print('⚠️ [SMS Code Page] User data not found or not a Map');
+          if (actualData != null) {
+            print('   - actualData.containsKey("user"): ${actualData.containsKey('user')}');
+            if (actualData.containsKey('user')) {
+              print('   - actualData["user"] type: ${actualData['user'].runtimeType}');
+            }
+          }
+        }
+      } else {
+        print('⚠️ [SMS Code Page] Data is not a Map, type: ${data.runtimeType}');
       }
-      }
-    } catch (e) {
-      print('❌ Error saving tokens from response: $e');
+      
+      print('✅ [SMS Code Page] _saveTokensFromResponse completed');
+    } catch (e, stackTrace) {
+      print('❌ [SMS Code Page] Error saving tokens from response');
+      print('   - error: $e');
+      print('   - stackTrace: $stackTrace');
     }
   }
 
@@ -462,135 +943,151 @@ class _SmsCodePageState extends State<SmsCodePage> {
     final inputBorderColor = isDark ? Colors.grey[700] : Colors.grey[300];
     final inputFillColor = isDark ? const Color(0xFF2A2A2A) : Colors.white;
 
-    return Scaffold(
-      backgroundColor: backgroundColor,
-      appBar: AppBar(
+    return PopScope(
+      canPop: !_isMyIdInProgress, // Prevent back navigation when MyID is in progress
+      onPopInvoked: (didPop) {
+        if (didPop && _isMyIdInProgress) {
+          // If back was pressed during MyID, show a message
+          CustomToast.show(
+            context,
+            message: 'Пожалуйста, дождитесь завершения верификации MyID',
+            isSuccess: false,
+          );
+        }
+      },
+      child: Scaffold(
         backgroundColor: backgroundColor,
-        elevation: 0,
-        leading: IconButton(
-          icon: Icon(
-            Icons.arrow_back,
-            color: textColor,
-                    ),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
+        appBar: AppBar(
+          backgroundColor: backgroundColor,
+          elevation: 0,
+          leading: IconButton(
+            icon: Icon(
+              Icons.arrow_back,
+              color: textColor,
+            ),
+            onPressed: _isMyIdInProgress 
+                ? null // Disable back button when MyID is in progress
+                : () => Navigator.of(context).pop(),
+          ),
         title: Image.asset(
                           'assets/img/logo.png',
           height: 32.h,
                         ),
         centerTitle: true,
                 ),
-      body: Padding(
-        padding: EdgeInsets.symmetric(horizontal: 24.w),
-                  child: Column(
-          crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      SizedBox(height: 40.h),
-            
-            // Title
-                      Text(
-                        'Введите отправленной код',
-              textAlign: TextAlign.center,
-                        style: GoogleFonts.poppins(
-                fontSize: 24.sp,
-                          fontWeight: FontWeight.w600,
-                color: textColor,
-                        ),
-                      ),
-            
-                      SizedBox(height: 8.h),
-            
-            // Subtitle
-                      Text(
-                        'Мы отправляем смс код',
-              textAlign: TextAlign.center,
-                        style: GoogleFonts.poppins(
-                          fontSize: 16.sp,
-                color: subtitleColor,
-                        ),
-                      ),
-            
-            SizedBox(height: 40.h),
-            
-            // SMS Code Input Fields
-                      Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                        children: List.generate(4, (index) {
-                return Container(
-                  width: 60.w,
-                  height: 60.h,
-                  decoration: BoxDecoration(
-                    color: inputFillColor,
-                    border: Border.all(
-                      color: inputBorderColor ?? Colors.grey,
-                      width: 1.5,
-                    ),
-                    borderRadius: BorderRadius.circular(12.r),
+      body: Stack(
+        children: [
+          Padding(
+            padding: EdgeInsets.symmetric(horizontal: 24.w),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                SizedBox(height: 40.h),
+        
+                // Title
+                Text(
+                  'Введите отправленной код',
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.poppins(
+                    fontSize: 24.sp,
+                    fontWeight: FontWeight.w600,
+                    color: textColor,
                   ),
-                  child: TextFormField(
-                              controller: _controllers[index],
-                              focusNode: _focusNodes[index],
-                              textAlign: TextAlign.center,
-                    style: GoogleFonts.poppins(
-                      fontSize: 24.sp,
-                      fontWeight: FontWeight.w600,
-                      color: textColor,
-                    ),
-                              keyboardType: TextInputType.number,
-                              inputFormatters: [
-                                FilteringTextInputFormatter.digitsOnly,
-                                LengthLimitingTextInputFormatter(1),
-                              ],
-                    decoration: const InputDecoration(
-                      border: InputBorder.none,
-                      counterText: '',
-                                  ),
-                    onChanged: (value) {
-                      if (value.isNotEmpty) {
-                        _onCodeChanged(value, index);
-                      } else {
-                        // Handle backspace - move to previous input
-                        if (index > 0) {
-                          _onCodeDeleted(index);
-                        }
-                      }
-                    },
-                              onTap: () {
-                      // Clear current input when tapped
-                      _controllers[index].clear();
-                              },
-                            ),
-                          );
-                        }),
-                      ),
-            
-            SizedBox(height: 40.h),
-            
-            // Continue Button
-                      SizedBox(
-                        width: double.infinity,
-                        height: 50.h,
-                        child: ElevatedButton(
-                onPressed: _isLoading || !_isCodeComplete() ? null : _verifyCode,
-                          style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF1B7EFF),
-                  disabledBackgroundColor: isDark 
-                      ? const Color(0xFF1B7EFF).withOpacity(0.5)
-                      : Colors.grey[400],
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12.r),
-                            ),
-                          ),
-                child: _isLoading
-                    ? SizedBox(
-                        width: 20.w,
-                        height: 20.h,
-                        child: const CircularProgressIndicator(
-                          color: Colors.white,
-                          strokeWidth: 2,
+                ),
+        
+                SizedBox(height: 8.h),
+        
+                // Subtitle
+                Text(
+                  'Мы отправляем смс код',
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.poppins(
+                    fontSize: 16.sp,
+                    color: subtitleColor,
+                  ),
+                ),
+        
+                SizedBox(height: 40.h),
+        
+                // SMS Code Input Fields
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: List.generate(4, (index) {
+                    return Container(
+                      width: 60.w,
+                      height: 60.h,
+                      decoration: BoxDecoration(
+                        color: inputFillColor,
+                        border: Border.all(
+                          color: inputBorderColor ?? Colors.grey,
+                          width: 1.5,
                         ),
-                      )
-                    : Text(
+                        borderRadius: BorderRadius.circular(12.r),
+                      ),
+                      child: TextFormField(
+                        controller: _controllers[index],
+                        focusNode: _focusNodes[index],
+                        textAlign: TextAlign.center,
+                        style: GoogleFonts.poppins(
+                          fontSize: 24.sp,
+                          fontWeight: FontWeight.w600,
+                          color: textColor,
+                        ),
+                        keyboardType: TextInputType.number,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly,
+                          LengthLimitingTextInputFormatter(1),
+                        ],
+                        decoration: const InputDecoration(
+                          border: InputBorder.none,
+                          counterText: '',
+                        ),
+                        onChanged: (value) {
+                          if (value.isNotEmpty) {
+                            _onCodeChanged(value, index);
+                          } else {
+                            // Handle backspace - move to previous input
+                            if (index > 0) {
+                              _onCodeDeleted(index);
+                            }
+                          }
+                        },
+                        onTap: () {
+                          // Clear current input when tapped
+                          _controllers[index].clear();
+                        },
+                      ),
+                    );
+                  }),
+                ),
+        
+                SizedBox(height: 40.h),
+        
+                // Continue Button
+                SizedBox(
+                  width: double.infinity,
+                  height: 50.h,
+                  child: ElevatedButton(
+                    onPressed: _isLoading || !_isCodeComplete() ? null : _verifyCode,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF1B7EFF),
+                      disabledBackgroundColor: isDark 
+                          ? const Color(0xFF1B7EFF).withOpacity(0.5)
+                          : Colors.grey[400],
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12.r),
+                      ),
+                    ),
+                    child: _isLoading
+                        ? SizedBox(
+                            width: 20.w,
+                            height: 20.h,
+                            child: const CircularProgressIndicator(
+                              color: Colors.white,
+                              strokeWidth: 2,
+                            ),
+                          )
+                        : Text(
                             'Продолжить',
                             style: GoogleFonts.poppins(
                               fontSize: 16.sp,
@@ -598,38 +1095,75 @@ class _SmsCodePageState extends State<SmsCodePage> {
                               color: Colors.white,
                             ),
                           ),
-                        ),
-                      ),
-            
-            SizedBox(height: 24.h),
-            
-            // Resend Code Button
-            Center(
-              child: TextButton(
-                onPressed: _isResending ? null : _resendCode,
-                child: _isResending
-                    ? SizedBox(
-                        width: 16.w,
-                        height: 16.h,
-                        child: CircularProgressIndicator(
-                          color: const Color(0xFF1B7EFF),
-                          strokeWidth: 2,
-                        ),
-                      )
-                    : Text(
-                        'Отправить код повторно',
-                        style: GoogleFonts.poppins(
-                          fontSize: 14.sp,
-                          color: const Color(0xFF1B7EFF),
-                          decoration: TextDecoration.underline,
                   ),
+                ),
+        
+                SizedBox(height: 24.h),
+        
+                // Resend Code Button
+                Center(
+                  child: TextButton(
+                    onPressed: _isResending ? null : _resendCode,
+                    child: _isResending
+                        ? SizedBox(
+                            width: 16.w,
+                            height: 16.h,
+                            child: CircularProgressIndicator(
+                              color: const Color(0xFF1B7EFF),
+                              strokeWidth: 2,
+                            ),
+                          )
+                        : Text(
+                            'Отправить код повторно',
+                            style: GoogleFonts.poppins(
+                              fontSize: 14.sp,
+                              color: const Color(0xFF1B7EFF),
+                              decoration: TextDecoration.underline,
+                            ),
+                          ),
+                  ),
+                ),
+        
+                const Spacer(),
+              ],
+            ),
+          ),
+          
+          // MyID Loading Overlay
+          if (_isMyIdInProgress)
+            Container(
+              color: Colors.black.withOpacity(0.7),
+              child: Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const CircularProgressIndicator(
+                      color: Color(0xFF1B7EFF),
+                      strokeWidth: 3,
+                    ),
+                    SizedBox(height: 24.h),
+                    Text(
+                      'MyID верификация идёт...',
+                      style: GoogleFonts.poppins(
+                        fontSize: 16.sp,
+                        fontWeight: FontWeight.w500,
+                        color: Colors.white,
+                      ),
+                    ),
+                    SizedBox(height: 8.h),
+                    Text(
+                      'Пожалуйста, подождите',
+                      style: GoogleFonts.poppins(
+                        fontSize: 14.sp,
+                        color: Colors.white70,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
-            
-            const Spacer(),
-            ],
-        ),
+        ],
+      ),
       ),
     );
   }

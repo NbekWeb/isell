@@ -175,49 +175,50 @@ class _AgreementsPageState extends State<AgreementsPage> {
 
     return Scaffold(
       backgroundColor: backgroundColor,
-      body: _isLoading
-          ? Center(
-              child: CircularProgressIndicator(
-                color: const Color(0xFF1B7EFF),
-              ),
-            )
-          : (_selectedTab == 0 ? _activeSales : _completedSales).isEmpty
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Container(
-                        width: 108.w,
-                        height: 108.w,
-                        decoration: BoxDecoration(
-                          color: isDark
-                              ? const Color(0xFF333333)
-                              : Colors.grey[200]!,
-                          shape: BoxShape.circle,
-                        ),
-                        child: Center(
-                          child: Icon(
-                            Icons.description_outlined,
-                            size: 44.w,
-                            color: const Color(0xFF2196F3),
+      body: SafeArea(
+        child: _isLoading
+            ? Center(
+                child: CircularProgressIndicator(
+                  color: const Color(0xFF1B7EFF),
+                ),
+              )
+            : (_selectedTab == 0 ? _activeSales : _completedSales).isEmpty
+                ? Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Container(
+                          width: 108.w,
+                          height: 108.w,
+                          decoration: BoxDecoration(
+                            color: isDark
+                                ? const Color(0xFF333333)
+                                : Colors.grey[200]!,
+                            shape: BoxShape.circle,
+                          ),
+                          child: Center(
+                            child: Icon(
+                              Icons.description_outlined,
+                              size: 44.w,
+                              color: const Color(0xFF2196F3),
+                            ),
                           ),
                         ),
-                      ),
-                      SizedBox(height: 24.h),
-                      Text(
-                        'Договор нет',
-                        style: GoogleFonts.poppins(
-                          fontSize: 20.sp,
-                          color: textColor,
-                          fontWeight: FontWeight.w600,
+                        SizedBox(height: 24.h),
+                        Text(
+                          'Договор нет',
+                          style: GoogleFonts.poppins(
+                            fontSize: 20.sp,
+                            color: textColor,
+                            fontWeight: FontWeight.w600,
+                          ),
+                          textAlign: TextAlign.center,
                         ),
-                        textAlign: TextAlign.center,
-                      ),
-                    ],
-                  ),
-                )
-              : CustomScrollView(
-                  slivers: [
+                      ],
+                    ),
+                  )
+                : CustomScrollView(
+                    slivers: [
                   
                     // Tabs
                     SliverToBoxAdapter(
@@ -586,6 +587,7 @@ class _AgreementsPageState extends State<AgreementsPage> {
                     ),
                   ],
                 ),
+      ),
     );
   }
 

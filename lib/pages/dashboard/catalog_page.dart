@@ -117,10 +117,11 @@ class _CatalogPageState extends State<CatalogPage> {
     
     return Scaffold(
       backgroundColor: backgroundColor,
-      body: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
+      body: SafeArea(
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
             // Logo
             Padding(
               padding: EdgeInsets.only(bottom: 16.h, top: 2.h),
@@ -304,6 +305,7 @@ class _CatalogPageState extends State<CatalogPage> {
               ),
           ],
         ),
+      ),
       ),
     );
   }

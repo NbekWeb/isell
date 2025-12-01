@@ -1,6 +1,7 @@
 import Flutter
 import UIKit
 import MyIdSDK
+import AVFoundation
 
 class MyIdPlugin: NSObject, FlutterPlugin, MyIdClientDelegate {
     static var shared: MyIdPlugin?
@@ -19,6 +20,7 @@ class MyIdPlugin: NSObject, FlutterPlugin, MyIdClientDelegate {
     }
     
     private var result: FlutterResult?
+    private var pendingCall: FlutterMethodCall?
     
     func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
         if call.method == "startMyId" {
@@ -31,6 +33,60 @@ class MyIdPlugin: NSObject, FlutterPlugin, MyIdClientDelegate {
     
     private func startMyId(call: FlutterMethodCall) {
         print("🔵 MyID Plugin - Received startMyId call")
+        print("📥 Arguments: \(call.arguments ?? "nil")")
+        
+        // Check camera permission first
+        let cameraStatus = AVCaptureDevice.authorizationStatus(for: .video)
+        print("📷 MyID Plugin - Camera permission status: \(cameraStatus.rawValue)")
+        
+        if cameraStatus == .notDetermined {
+            print("📷 MyID Plugin - Camera permission not determined, requesting...")
+            // Store the call for retry after permission is granted
+            pendingCall = call
+            AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
+                DispatchQueue.main.async {
+                    if granted {
+                        print("✅ MyID Plugin - Camera permission granted")
+                        // Permission granted, retry starting MyID SDK
+                        // Add a small delay to ensure permission is fully processed
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                            if let call = self?.pendingCall {
+                                self?.pendingCall = nil
+                                self?.startMyIdInternal(call: call)
+                            }
+                        }
+                    } else {
+                        print("❌ MyID Plugin - Camera permission denied")
+                        // Permission denied, return error with better message
+                        self?.result?([
+                            "success": false,
+                            "code": "CAMERA_PERMISSION_DENIED",
+                            "message": "Для работы MyID требуется доступ к камере. Пожалуйста, разрешите доступ к камере в настройках приложения."
+                        ])
+                        self?.result = nil
+                        self?.pendingCall = nil
+                    }
+                }
+            }
+            return
+        } else if cameraStatus == .denied || cameraStatus == .restricted {
+            print("❌ MyID Plugin - Camera permission denied or restricted")
+            result?([
+                "success": false,
+                "code": "CAMERA_PERMISSION_DENIED",
+                "message": "Для работы MyID требуется доступ к камере. Пожалуйста, разрешите доступ к камере в настройках приложения."
+            ])
+            result = nil
+            return
+        }
+        
+        // Permission is granted, proceed with starting MyID
+        print("✅ MyID Plugin - Camera permission already granted")
+        startMyIdInternal(call: call)
+    }
+    
+    private func startMyIdInternal(call: FlutterMethodCall) {
+        print("🔵 MyID Plugin - Starting MyID SDK (internal)")
         print("📥 Arguments: \(call.arguments ?? "nil")")
         
         guard let args = call.arguments as? [String: Any] else {

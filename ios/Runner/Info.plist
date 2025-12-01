@@ -56,11 +56,11 @@
 		</array>
 		<key>YANDEX_MAPKIT_API_KEY</key>
 		<string>491a85a5-7445-4d5d-a419-84bda4ad6328</string>
-	<key>NSCameraUsageDescription</key>
-	<string>Required for document and facial capture</string>
-	<key>NSLocationWhenInUseUsageDescription</key>
+		<key>NSCameraUsageDescription</key>
+		<string>Для верификации через MyID требуется доступ к камере. Мы используем камеру для захвата фотографии лица и документов.</string>
+		<key>NSLocationWhenInUseUsageDescription</key>
 		<string>Для доставки требуется доступ к вашему местоположению. Мы используем его для определения адреса доставки на карте.</string>
-	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+		<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 		<string>Для доставки требуется доступ к вашему местоположению. Мы используем его для определения адреса доставки на карте.</string>
 	</dict>
 </plist>

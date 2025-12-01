@@ -3,6 +3,7 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../../services/theme_service.dart';
 import '../../services/myid_service.dart';
 import '../../services/user_service.dart';
@@ -27,6 +28,7 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _isProcessingMyId = false;
   bool _isLoggedIn = false;
   Map<String, dynamic>? _userData;
+  PermissionStatus? _cameraPermissionStatus;
 
   @override
   void initState() {
@@ -34,9 +36,17 @@ class _SettingsPageState extends State<SettingsPage> {
     _loadTheme();
     _loadPushNotifications();
     _checkAuthStatus();
+    _checkCameraPermission();
     
     // Test token status on page load
     UserService.testTokenStatus();
+  }
+
+  Future<void> _checkCameraPermission() async {
+    final status = await Permission.camera.status;
+    setState(() {
+      _cameraPermissionStatus = status;
+    });
   }
 
   Future<void> _checkAuthStatus() async {
@@ -184,6 +194,193 @@ class _SettingsPageState extends State<SettingsPage> {
     return 'Нет данных';
   }
 
+  Future<void> _requestCameraPermission() async {
+    try {
+      print('🔵 Requesting camera permission...');
+      print('📱 Platform: ${Theme.of(context).platform}');
+      
+      // Check current status first
+      final cameraStatus = await Permission.camera.status;
+      print('   - Current cameraStatus: $cameraStatus');
+      print('   - isGranted: ${cameraStatus.isGranted}');
+      print('   - isDenied: ${cameraStatus.isDenied}');
+      print('   - isPermanentlyDenied: ${cameraStatus.isPermanentlyDenied}');
+      print('   - isLimited: ${cameraStatus.isLimited}');
+      print('   - isRestricted: ${cameraStatus.isRestricted}');
+      
+      if (cameraStatus.isGranted) {
+        if (mounted) {
+          setState(() {
+            _cameraPermissionStatus = cameraStatus;
+          });
+          CustomToast.show(
+            context,
+            message: 'Доступ к камере уже разрешен',
+            isSuccess: true,
+          );
+        }
+        return;
+      }
+      
+      if (cameraStatus.isPermanentlyDenied) {
+        print('❌ Camera permission permanently denied, opening settings...');
+        if (mounted) {
+          showDialog(
+            context: context,
+            builder: (BuildContext context) {
+              return AlertDialog(
+                title: const Text('Доступ к камере требуется'),
+                content: const Text(
+                  'Для работы приложения требуется доступ к камере. Пожалуйста, разрешите доступ к камере в настройках приложения.\n\nЕсли диалог разрешения не появляется, убедитесь, что:\n1. Приложение пересобрано после добавления разрешения\n2. Вы используете реальное устройство (не симулятор)\n3. В Info.plist добавлен ключ NSCameraUsageDescription',
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () {
+                      Navigator.of(context).pop();
+                    },
+                    child: const Text('Отмена'),
+                  ),
+                  TextButton(
+                    onPressed: () async {
+                      Navigator.of(context).pop();
+                      await openAppSettings();
+                    },
+                    child: const Text('Настройки'),
+                  ),
+                ],
+              );
+            },
+          );
+        }
+        return;
+      }
+      
+      if (cameraStatus.isRestricted) {
+        print('⚠️ Camera permission is restricted by system');
+        if (mounted) {
+          CustomToast.show(
+            context,
+            message: 'Доступ к камере ограничен системой',
+            isSuccess: false,
+          );
+        }
+        return;
+      }
+      
+      print('⚠️ Camera permission not granted, requesting...');
+      print('   - Requesting permission dialog should appear now...');
+      
+      // Request camera permission - this should show the system dialog
+      final requestResult = await Permission.camera.request();
+      print('   - requestResult: $requestResult');
+      print('   - requestResult.isGranted: ${requestResult.isGranted}');
+      print('   - requestResult.isDenied: ${requestResult.isDenied}');
+      print('   - requestResult.isPermanentlyDenied: ${requestResult.isPermanentlyDenied}');
+      
+      // Update permission status
+      if (mounted) {
+        setState(() {
+          _cameraPermissionStatus = requestResult;
+        });
+      }
+      
+      // Re-check status after request
+      final newStatus = await Permission.camera.status;
+      print('   - New status after request: $newStatus');
+      
+      // Check if permission became permanently denied (iOS remembers previous denial)
+      if (requestResult.isPermanentlyDenied || newStatus.isPermanentlyDenied) {
+        print('❌ Camera permission permanently denied - iOS remembers previous denial');
+        if (mounted) {
+          showDialog(
+            context: context,
+            builder: (BuildContext context) {
+              return AlertDialog(
+                title: const Text('Доступ к камере требуется'),
+                content: const Text(
+                  'iOS запомнил предыдущий отказ в доступе к камере. Пожалуйста:\n\n1. Удалите приложение полностью\n2. Перезапустите устройство (рекомендуется)\n3. Установите приложение заново\n\nИли откройте Настройки и разрешите доступ к камере вручную.',
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () {
+                      Navigator.of(context).pop();
+                    },
+                    child: const Text('Отмена'),
+                  ),
+                  TextButton(
+                    onPressed: () async {
+                      Navigator.of(context).pop();
+                      await openAppSettings();
+                    },
+                    child: const Text('Настройки'),
+                  ),
+                ],
+              );
+            },
+          );
+        }
+      } else if (requestResult.isGranted || newStatus.isGranted) {
+        print('✅ Camera permission granted');
+        if (mounted) {
+          CustomToast.show(
+            context,
+            message: 'Доступ к камере разрешен',
+            isSuccess: true,
+          );
+        }
+      } else if (requestResult.isDenied || newStatus.isDenied) {
+        print('❌ Camera permission denied');
+        if (mounted) {
+          CustomToast.show(
+            context,
+            message: 'Доступ к камере отклонен. Если диалог не появился, удалите приложение и установите заново.',
+            isSuccess: false,
+          );
+        }
+      } else {
+        print('❌ Camera permission permanently denied');
+        if (mounted) {
+          showDialog(
+            context: context,
+            builder: (BuildContext context) {
+              return AlertDialog(
+                title: const Text('Доступ к камере требуется'),
+                content: const Text(
+                  'Для работы приложения требуется доступ к камере. Пожалуйста, разрешите доступ к камере в настройках приложения.',
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () {
+                      Navigator.of(context).pop();
+                    },
+                    child: const Text('Отмена'),
+                  ),
+                  TextButton(
+                    onPressed: () async {
+                      Navigator.of(context).pop();
+                      await openAppSettings();
+                    },
+                    child: const Text('Настройки'),
+                  ),
+                ],
+              );
+            },
+          );
+        }
+      }
+    } catch (e, stackTrace) {
+      print('❌ Error requesting camera permission: $e');
+      print('📋 Stack trace: $stackTrace');
+      if (mounted) {
+        CustomToast.show(
+          context,
+          message: 'Ошибка при запросе доступа к камере: ${e.toString()}',
+          isSuccess: false,
+        );
+      }
+    }
+  }
+
   Future<void> _handleMyIdAuthentication() async {
     if (_isProcessingMyId) {
       return;
@@ -194,6 +391,99 @@ class _SettingsPageState extends State<SettingsPage> {
     });
 
     try {
+      // Step 0: Check and request camera permission first
+      print('🔵 Step 0: Checking camera permission...');
+      final cameraStatus = await Permission.camera.status;
+      print('   - cameraStatus: $cameraStatus');
+      
+      if (!cameraStatus.isGranted) {
+        // Check if permission is permanently denied
+        if (cameraStatus.isPermanentlyDenied) {
+          print('❌ Camera permission permanently denied, opening settings...');
+          setState(() {
+            _isProcessingMyId = false;
+          });
+          
+          // Show dialog to open settings
+          if (mounted) {
+            showDialog(
+              context: context,
+              builder: (BuildContext context) {
+                return AlertDialog(
+                  title: const Text('Доступ к камере требуется'),
+                  content: const Text(
+                    'Для работы MyID требуется доступ к камере. Пожалуйста, разрешите доступ к камере в настройках приложения.',
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () {
+                        Navigator.of(context).pop();
+                      },
+                      child: const Text('Отмена'),
+                    ),
+                    TextButton(
+                      onPressed: () async {
+                        Navigator.of(context).pop();
+                        await openAppSettings();
+                      },
+                      child: const Text('Настройки'),
+                    ),
+                  ],
+                );
+              },
+            );
+          }
+          return;
+        }
+        
+        print('⚠️ Camera permission not granted, requesting...');
+        // Request camera permission
+        final requestResult = await Permission.camera.request();
+        print('   - requestResult: $requestResult');
+        
+        if (!requestResult.isGranted) {
+          print('❌ Camera permission denied');
+          setState(() {
+            _isProcessingMyId = false;
+          });
+          
+          // Show dialog to open settings
+          if (mounted) {
+            showDialog(
+              context: context,
+              builder: (BuildContext context) {
+                return AlertDialog(
+                  title: const Text('Доступ к камере требуется'),
+                  content: const Text(
+                    'Для верификации через MyID требуется доступ к камере. Пожалуйста, разрешите доступ к камере в настройках приложения.',
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () {
+                        Navigator.of(context).pop();
+                      },
+                      child: const Text('Отмена'),
+                    ),
+                    TextButton(
+                      onPressed: () async {
+                        Navigator.of(context).pop();
+                        await openAppSettings();
+                      },
+                      child: const Text('Настройки'),
+                    ),
+                  ],
+                );
+              },
+            );
+          }
+          return;
+        }
+        
+        print('✅ Camera permission granted');
+      } else {
+        print('✅ Camera permission already granted');
+      }
+
       // Step 1: Get session ID from MyID API directly
       print('🔵 Step 1: Getting session ID from MyID API...');
       String sessionId;
@@ -320,11 +610,14 @@ class _SettingsPageState extends State<SettingsPage> {
       }
     } on MyIdException catch (e) {
       String errorMessage = 'Ошибка авторизации';
+      bool isCameraPermissionError = false;
 
       // Handle specific error codes
       switch (e.code) {
         case '102':
+        case 'CAMERA_PERMISSION_DENIED':
           errorMessage = 'Доступ к камере запрещен';
+          isCameraPermissionError = true;
           break;
         case '103':
           errorMessage = 'Ошибка при получении данных';
@@ -337,9 +630,53 @@ class _SettingsPageState extends State<SettingsPage> {
           break;
         default:
           errorMessage = e.message;
+          // Check if it's a camera permission error by message
+          if (e.message.toLowerCase().contains('камера') || 
+              e.message.toLowerCase().contains('camera') ||
+              e.code == 'CAMERA_PERMISSION_DENIED') {
+            isCameraPermissionError = true;
+          }
       }
 
-      CustomToast.show(context, message: errorMessage, isSuccess: false);
+      // If it's a camera permission error, show dialog to open settings
+      if (isCameraPermissionError && mounted) {
+        // Check current permission status
+        final cameraStatus = await Permission.camera.status;
+        
+        if (cameraStatus.isDenied || cameraStatus.isPermanentlyDenied) {
+          // Show dialog to open settings
+          showDialog(
+            context: context,
+            builder: (BuildContext context) {
+              return AlertDialog(
+                title: const Text('Доступ к камере требуется'),
+                content: const Text(
+                  'Для работы MyID требуется доступ к камере. Пожалуйста, разрешите доступ к камере в настройках приложения.',
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () {
+                      Navigator.of(context).pop();
+                    },
+                    child: const Text('Отмена'),
+                  ),
+                  TextButton(
+                    onPressed: () async {
+                      Navigator.of(context).pop();
+                      await openAppSettings();
+                    },
+                    child: const Text('Настройки'),
+                  ),
+                ],
+              );
+            },
+          );
+        } else {
+          CustomToast.show(context, message: errorMessage, isSuccess: false);
+        }
+      } else {
+        CustomToast.show(context, message: errorMessage, isSuccess: false);
+      }
     } catch (e) {
       print('❌ Error: $e');
       CustomToast.show(
@@ -465,6 +802,166 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
               SizedBox(height: 24.h),
             ],
+
+            // MyID Authentication Button (for logged in users)
+            if (_isLoggedIn) ...[
+              Container(
+                decoration: BoxDecoration(
+                  color: containerColor,
+                  borderRadius: BorderRadius.circular(12.r),
+                ),
+                child: Column(
+                  children: [
+                    GestureDetector(
+                      onTap: _isProcessingMyId ? null : _handleMyIdAuthentication,
+                      child: Container(
+                        width: double.infinity,
+                        padding: EdgeInsets.all(16.w),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 40.w,
+                              height: 40.w,
+                              decoration: BoxDecoration(
+                                color: iconBgColor,
+                                borderRadius: BorderRadius.circular(8.r),
+                              ),
+                              child: Center(
+                                child: _isProcessingMyId
+                                    ? SizedBox(
+                                        width: 20,
+                                        height: 20,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          valueColor: AlwaysStoppedAnimation<Color>(
+                                            const Color(0xFF1B7EFF),
+                                          ),
+                                        ),
+                                      )
+                                    : Icon(
+                                        Icons.verified_user,
+                                        size: 20,
+                                        color: const Color(0xFF1B7EFF),
+                                      ),
+                              ),
+                            ),
+                            SizedBox(width: 16.w),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'MyID верификация',
+                                    style: GoogleFonts.poppins(
+                                      fontSize: 16.sp,
+                                      fontWeight: FontWeight.w500,
+                                      color: textColor,
+                                    ),
+                                  ),
+                                  SizedBox(height: 4.h),
+                                  Text(
+                                    _isProcessingMyId
+                                        ? 'Обработка...'
+                                        : 'Верификация через MyID',
+                                    style: GoogleFonts.poppins(
+                                      fontSize: 12.sp,
+                                      color: subtitleColor,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            if (!_isProcessingMyId)
+                              Icon(
+                                Icons.chevron_right,
+                                color: subtitleColor,
+                                size: 24.w,
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              SizedBox(height: 24.h),
+            ],
+
+            // Camera Permission Button (Always visible)
+            Container(
+              decoration: BoxDecoration(
+                color: containerColor,
+                borderRadius: BorderRadius.circular(12.r),
+              ),
+              child: Column(
+                children: [
+                  GestureDetector(
+                    onTap: _requestCameraPermission,
+                    child: Container(
+                      width: double.infinity,
+                      padding: EdgeInsets.all(16.w),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 40.w,
+                            height: 40.w,
+                            decoration: BoxDecoration(
+                              color: iconBgColor,
+                              borderRadius: BorderRadius.circular(8.r),
+                            ),
+                            child: Center(
+                              child: Icon(
+                                Icons.camera_alt,
+                                size: 20,
+                                color: _cameraPermissionStatus?.isGranted == true
+                                    ? Colors.green
+                                    : const Color(0xFF1B7EFF),
+                              ),
+                            ),
+                          ),
+                          SizedBox(width: 16.w),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Доступ к камере',
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 16.sp,
+                                    fontWeight: FontWeight.w500,
+                                    color: textColor,
+                                  ),
+                                ),
+                                SizedBox(height: 4.h),
+                                Text(
+                                  _cameraPermissionStatus?.isGranted == true
+                                      ? 'Разрешение предоставлено'
+                                      : _cameraPermissionStatus?.isPermanentlyDenied == true
+                                          ? 'Разрешение отклонено. Откройте настройки'
+                                          : 'Запросить разрешение на использование камеры',
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 12.sp,
+                                    color: _cameraPermissionStatus?.isGranted == true
+                                        ? Colors.green
+                                        : subtitleColor,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Icon(
+                            Icons.chevron_right,
+                            color: subtitleColor,
+                            size: 24.w,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            SizedBox(height: 24.h),
 
             // Push Notifications, Help and Addresses - Always visible (grouped together)
             Container(
