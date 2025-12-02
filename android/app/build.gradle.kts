@@ -61,4 +61,7 @@ dependencies {
     implementation("uz.myid.sdk.capture:myid-capture-sdk:3.0.3")
     // Uncomment if using VideoIdentification entry mode:
     // implementation("uz.myid.sdk.capture:myid-video-capture-sdk:3.0.3")
+    
+    // Yandex MapKit dependency
+    implementation("com.yandex.android:maps.mobile:4.22.0-lite")
 }

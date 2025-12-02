@@ -1852,6 +1852,53 @@ color: textColor,
         final abilityToOrder = result['ability_to_order'] as bool? ?? true;
         final status = result['status']?.toString() ?? '';
         
+        // Special case: status is "Accepted" but ability_to_order is false
+        // Show error toast about minimum contribution
+        if (status.toLowerCase() == 'accepted' && !abilityToOrder) {
+          final minimumContribution = result['minimum_contribution'];
+          String minimumContributionText = '15';
+          
+          if (minimumContribution != null) {
+            final numValue = minimumContribution is num 
+                ? minimumContribution 
+                : (double.tryParse(minimumContribution.toString()) ?? 15.0);
+            
+            // Format: remove .0 if it's a whole number
+            if (numValue % 1 == 0) {
+              minimumContributionText = numValue.toInt().toString();
+            } else {
+              minimumContributionText = numValue.toString();
+            }
+          }
+          
+          CustomToast.show(
+            context,
+            message: 'Минимальный первоначальный взнос должен быть не менее $minimumContributionText',
+            isSuccess: false,
+          );
+          
+          setState(() {
+            _canBuy = false;
+          });
+          
+          await _savePaymentSchedule(result);
+          return;
+        }
+        
+        // Special case: status is "Denied" or "Denied by client"
+        final statusLower = status.toLowerCase();
+        if (statusLower == 'denied' || statusLower == 'denied by client') {
+          setState(() {
+            _canBuy = false;
+          });
+          
+          await _savePaymentSchedule(result);
+          
+          // Show denied modal
+          _showDeniedModal();
+          return;
+        }
+        
         if (abilityToOrder && status.toLowerCase() == 'accepted') {
           // Accepted - clear checking state and allow order
           final prefs = await SharedPreferences.getInstance();
@@ -2109,6 +2156,50 @@ color: textColor,
         // Check ability_to_order and status
         final abilityToOrder = result['ability_to_order'] as bool? ?? true;
         final status = result['status']?.toString() ?? '';
+        
+        // Special case: status is "Accepted" but ability_to_order is false
+        // Show error toast about minimum contribution
+        if (status.toLowerCase() == 'accepted' && !abilityToOrder) {
+          final minimumContribution = result['minimum_contribution'];
+          String minimumContributionText = '15';
+          
+          if (minimumContribution != null) {
+            final numValue = minimumContribution is num 
+                ? minimumContribution 
+                : (double.tryParse(minimumContribution.toString()) ?? 15.0);
+            
+            // Format: remove .0 if it's a whole number
+            if (numValue % 1 == 0) {
+              minimumContributionText = numValue.toInt().toString();
+            } else {
+              minimumContributionText = numValue.toString();
+            }
+          }
+          
+          CustomToast.show(
+            context,
+            message: 'Минимальный первоначальный взнос должен быть не менее $minimumContributionText',
+            isSuccess: false,
+          );
+          
+          setState(() {
+            _canBuy = false;
+          });
+          
+          return;
+        }
+        
+        // Special case: status is "Denied" or "Denied by client"
+        final statusLower = status.toLowerCase();
+        if (statusLower == 'denied' || statusLower == 'denied by client') {
+          setState(() {
+            _canBuy = false;
+          });
+          
+          // Show denied modal
+          _showDeniedModal();
+          return;
+        }
         
         // If not accepted, save checking time and start timer
         if (!abilityToOrder || status.toLowerCase() != 'accepted') {
@@ -3232,6 +3323,21 @@ color: textColor,
       // When modal is closed
     });
   }
+
+  void _showDeniedModal() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final textColor = isDark ? Colors.white : Colors.black87;
+    final cardColor = isDark ? const Color(0xFF2A2A2A) : Colors.white;
+    
+    showDialog(
+      context: context,
+      barrierDismissible: true, // Allow closing by tapping outside
+      builder: (context) => _DeniedModalDialog(
+        textColor: textColor,
+        cardColor: cardColor,
+      ),
+    );
+  }
 }
 
 class _CheckingModalDialog extends StatefulWidget {
@@ -3320,7 +3426,7 @@ class _CheckingModalDialogState extends State<_CheckingModalDialog> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Ваш запрос рассматривается администраторами.',
+            'Ваша заявка рассматривается',
             style: GoogleFonts.poppins(
               fontSize: 16.sp,
               color: widget.textColor,
@@ -3329,7 +3435,7 @@ class _CheckingModalDialogState extends State<_CheckingModalDialog> {
           SizedBox(height: 16.h),
           if (_currentSeconds > 0) ...[
             Text(
-              'Если ответ не придет, попробуйте снова через:',
+              'Попробуйте снова через:',
               style: GoogleFonts.poppins(
                 fontSize: 14.sp,
                 color: widget.textColor.withOpacity(0.7),
@@ -3372,6 +3478,63 @@ class _CheckingModalDialogState extends State<_CheckingModalDialog> {
               ),
             ),
           ],
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () {
+            Navigator.of(context).pop();
+          },
+          child: Text(
+            'Понятно',
+            style: GoogleFonts.poppins(
+              fontSize: 16.sp,
+              fontWeight: FontWeight.w600,
+              color: const Color(0xFF1B7EFF),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _DeniedModalDialog extends StatelessWidget {
+  final Color textColor;
+  final Color cardColor;
+
+  const _DeniedModalDialog({
+    required this.textColor,
+    required this.cardColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: cardColor,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16.r),
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'К сожалению, вы не можете приобрести у нас товары в рассрочку',
+            style: GoogleFonts.poppins(
+              fontSize: 16.sp,
+              color: textColor,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          SizedBox(height: 16.h),
+          Text(
+            'Попробуйте снова через 1 месяц',
+            style: GoogleFonts.poppins(
+              fontSize: 14.sp,
+              color: textColor.withOpacity(0.7),
+            ),
+          ),
         ],
       ),
       actions: [
@@ -3491,7 +3654,7 @@ class _AdminCheckModalDialogState extends State<_AdminCheckModalDialog> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Администраторы проверят и подтвердят ваш заказ',
+            'Ваша заявка рассматривается',
             style: GoogleFonts.poppins(
               fontSize: 16.sp,
               color: widget.textColor,
@@ -3500,7 +3663,7 @@ class _AdminCheckModalDialogState extends State<_AdminCheckModalDialog> {
           SizedBox(height: 16.h),
           if (_currentSeconds > 0) ...[
             Text(
-              'Если ответ не придет, попробуйте снова через:',
+              'Попробуйте снова через:',
               style: GoogleFonts.poppins(
                 fontSize: 14.sp,
                 color: widget.textColor.withOpacity(0.7),
@@ -3563,3 +3726,4 @@ class _AdminCheckModalDialogState extends State<_AdminCheckModalDialog> {
     );
   }
 }
+

@@ -14,6 +14,10 @@ pluginManagement {
         google()
         mavenCentral()
         gradlePluginPortal()
+        // Yandex MapKit repository
+        maven {
+            url = uri("https://maven.yandex.ru/repository/yandex-maps-public")
+        }
     }
 }
 

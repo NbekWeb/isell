@@ -118,11 +118,13 @@ class AgreementDetailPage extends StatelessWidget {
           ),
         ),
       ),
-      body: SingleChildScrollView(
-        padding: EdgeInsets.all(16.w),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
+      body: SafeArea(
+        child: SingleChildScrollView(
+          physics: const ClampingScrollPhysics(),
+          padding: EdgeInsets.fromLTRB(16.w, 16.h, 16.w, 32.h),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
             // Product Image
             Container(
               height: 330.h,
@@ -365,7 +367,11 @@ class AgreementDetailPage extends StatelessWidget {
                 ],
               ),
             ),
+            
+            // Bottom spacing to ensure last item is fully visible
+            SizedBox(height: 16.h),
           ],
+        ),
         ),
       ),
     );

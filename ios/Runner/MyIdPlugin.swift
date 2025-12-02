@@ -36,36 +36,32 @@ class MyIdPlugin: NSObject, FlutterPlugin, MyIdClientDelegate {
         print("📥 Arguments: \(call.arguments ?? "nil")")
         
         // Check camera permission first
-        let cameraStatus = AVCaptureDevice.authorizationStatus(for: .video)
+        var cameraStatus = AVCaptureDevice.authorizationStatus(for: .video)
         print("📷 MyID Plugin - Camera permission status: \(cameraStatus.rawValue)")
         
+        // If permission is not determined, wait a bit and check again
+        // This handles the case where Flutter just requested permission but iOS hasn't updated the status yet
         if cameraStatus == .notDetermined {
-            print("📷 MyID Plugin - Camera permission not determined, requesting...")
-            // Store the call for retry after permission is granted
-            pendingCall = call
-            AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
-                DispatchQueue.main.async {
-                    if granted {
-                        print("✅ MyID Plugin - Camera permission granted")
-                        // Permission granted, retry starting MyID SDK
-                        // Add a small delay to ensure permission is fully processed
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                            if let call = self?.pendingCall {
-                                self?.pendingCall = nil
-                                self?.startMyIdInternal(call: call)
-                            }
-                        }
-                    } else {
-                        print("❌ MyID Plugin - Camera permission denied")
-                        // Permission denied, return error with better message
-                        self?.result?([
-                            "success": false,
-                            "code": "CAMERA_PERMISSION_DENIED",
-                            "message": "Для работы MyID требуется доступ к камере. Пожалуйста, разрешите доступ к камере в настройках приложения."
-                        ])
-                        self?.result = nil
-                        self?.pendingCall = nil
-                    }
+            print("📷 MyID Plugin - Camera permission not determined, waiting 300ms and re-checking...")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                cameraStatus = AVCaptureDevice.authorizationStatus(for: .video)
+                print("📷 MyID Plugin - Camera permission status after wait: \(cameraStatus.rawValue)")
+                
+                if cameraStatus == .authorized {
+                    print("✅ MyID Plugin - Camera permission granted (after wait)")
+                    self?.startMyIdInternal(call: call)
+                } else if cameraStatus == .denied || cameraStatus == .restricted {
+                    print("❌ MyID Plugin - Camera permission denied or restricted")
+                    self?.result?([
+                        "success": false,
+                        "code": "CAMERA_PERMISSION_DENIED",
+                        "message": "Для работы MyID требуется доступ к камере. Пожалуйста, разрешите доступ к камере в настройках приложения."
+                    ])
+                    self?.result = nil
+                } else {
+                    // Still not determined - Flutter should have requested it, but let MyID SDK handle it
+                    print("⚠️ MyID Plugin - Camera permission still not determined, letting MyID SDK handle it")
+                    self?.startMyIdInternal(call: call)
                 }
             }
             return
@@ -262,4 +258,3 @@ class MyIdPlugin: NSObject, FlutterPlugin, MyIdClientDelegate {
         print("📢 MyID Plugin - Event: \(event.rawValue)")
     }
 }
-

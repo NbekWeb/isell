@@ -147,17 +147,6 @@ NwIDAQAB''';
   /// - passport_series, passport_number
   /// - phone_number
   /// - and other user information
-  /// 
-  /// Get user data from MyID API using code (for frontend testing)
-  /// GET https://api.devmyid.uz/api/v1/sdk/data?code={code}
-  /// 
-  /// Returns user data including:
-  /// - first_name, last_name, middle_name
-  /// - birth_date
-  /// - pinfl
-  /// - passport_series, passport_number
-  /// - phone_number
-  /// - and other user information
   static Future<Map<String, dynamic>> getUserDataByCode(String code) async {
     try {
       // Step 1: Get access token
@@ -329,10 +318,9 @@ NwIDAQAB''';
     try {
       print('🔵 MyID Backend Verify API Request: /accounts/myid/verify/');
       print('📤 Code: $code');
-      print('📤 Token: ${token.substring(0, 20)}...');
+      print('📤 Token: $token');
       print('📤 Phone: $phoneNumber');
       
-      // Import ApiService for backend calls
       final dio = Dio();
       
       final response = await dio.get(
@@ -345,6 +333,10 @@ NwIDAQAB''';
         options: Options(
           headers: {
             'Content-Type': 'application/json',
+          },
+          validateStatus: (status) {
+            // Accept all status codes to handle errors properly
+            return status! < 600;
           },
         ),
       );
@@ -380,10 +372,24 @@ NwIDAQAB''';
           'data': data,
         };
       } else {
-        print('❌ MyID Backend Verify - Unexpected status code: ${response.statusCode}');
+        // Handle error responses (400, 500, etc.)
+        print('❌ MyID Backend Verify - Response: $response');
+        print('❌ MyID Backend Verify - Error status code: ${response.statusCode}');
+        String errorMessage = 'Ошибка сервера (${response.statusCode})';
+        
+        if (data != null && data is Map) {
+          if (data.containsKey('error')) {
+            errorMessage = data['error'].toString();
+          } else if (data.containsKey('message')) {
+            errorMessage = data['message'].toString();
+          } else if (data.containsKey('detail')) {
+            errorMessage = data['detail'].toString();
+          }
+        }
+        
         return {
           'success': false,
-          'error': 'Unexpected status code: ${response.statusCode}',
+          'error': errorMessage,
           'data': data, // Still return data in case it has useful info
         };
       }

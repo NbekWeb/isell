@@ -15,9 +15,11 @@ import YandexMapsMobile
     
     GeneratedPluginRegistrant.register(with: self)
     
-    // Register MyID plugin
-    if let registrar = self.registrar(forPlugin: "MyIdPlugin") {
-      MyIdPlugin.register(with: registrar)
+    // Register MyID plugin manually
+    // Get the FlutterViewController and create a registrar
+    if let controller = window?.rootViewController as? FlutterViewController {
+      let registrar = self.registrar(forPlugin: "MyIdPlugin")
+      MyIdPlugin.register(with: registrar!)
     }
     
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)

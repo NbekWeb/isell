@@ -52,10 +52,10 @@ class _CompanyAddressesPageState extends State<CompanyAddressesPage> {
       // Create placemarks for all addresses
       await _createPlacemarks();
       
-      // Move to first address on map
+      // Fit all addresses on map or move to first one
       if (_addresses.isNotEmpty) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          _moveToAddress(0);
+          _fitAllAddresses();
         });
       }
     }
@@ -130,6 +130,67 @@ class _CompanyAddressesPageState extends State<CompanyAddressesPage> {
     }
   }
 
+  void _fitAllAddresses() {
+    if (_addresses.isEmpty || _mapController == null) return;
+    
+    if (_addresses.length == 1) {
+      // If only one address, just move to it
+      _moveToAddress(0);
+      return;
+    }
+    
+    // Calculate bounds for all addresses
+    double minLat = double.infinity;
+    double maxLat = -double.infinity;
+    double minLng = double.infinity;
+    double maxLng = -double.infinity;
+    
+    for (final address in _addresses) {
+      final lat = double.tryParse(address['latitude']?.toString() ?? '0') ?? 0.0;
+      final lng = double.tryParse(address['longitude']?.toString() ?? '0') ?? 0.0;
+      
+      if (lat != 0.0 && lng != 0.0) {
+        minLat = minLat < lat ? minLat : lat;
+        maxLat = maxLat > lat ? maxLat : lat;
+        minLng = minLng < lng ? minLng : lng;
+        maxLng = maxLng > lng ? maxLng : lng;
+      }
+    }
+    
+    if (minLat == double.infinity) return;
+    
+    // Calculate center point
+    final centerLat = (minLat + maxLat) / 2;
+    final centerLng = (minLng + maxLng) / 2;
+    
+    // Calculate zoom level based on bounds
+    final latDiff = maxLat - minLat;
+    final lngDiff = maxLng - minLng;
+    final maxDiff = latDiff > lngDiff ? latDiff : lngDiff;
+    
+    double zoom = 15.0;
+    if (maxDiff > 0.1) {
+      zoom = 10.0;
+    } else if (maxDiff > 0.05) {
+      zoom = 12.0;
+    } else if (maxDiff > 0.01) {
+      zoom = 14.0;
+    }
+    
+    _mapController!.moveCamera(
+      CameraUpdate.newCameraPosition(
+        CameraPosition(
+          target: Point(latitude: centerLat, longitude: centerLng),
+          zoom: zoom,
+        ),
+      ),
+      animation: const MapAnimation(
+        type: MapAnimationType.smooth,
+        duration: 0.5,
+      ),
+    );
+  }
+
   Future<void> _openInNavigator() async {
     if (_addresses.isEmpty || _currentIndex >= _addresses.length) return;
     
@@ -184,23 +245,24 @@ class _CompanyAddressesPageState extends State<CompanyAddressesPage> {
           ),
         ),
       ),
-      body: _isLoading
-          ? const Center(
-              child: CircularProgressIndicator(
-                color: Color(0xFF1B7EFF),
-              ),
-            )
-          : _addresses.isEmpty
-              ? Center(
-                  child: Text(
-                    'Адреса не найдены',
-                    style: GoogleFonts.poppins(
-                      fontSize: 16.sp,
-                      color: subtitleColor,
+      body: SafeArea(
+        child: _isLoading
+            ? const Center(
+                child: CircularProgressIndicator(
+                  color: Color(0xFF1B7EFF),
+                ),
+              )
+            : _addresses.isEmpty
+                ? Center(
+                    child: Text(
+                      'Адреса не найдены',
+                      style: GoogleFonts.poppins(
+                        fontSize: 16.sp,
+                        color: subtitleColor,
+                      ),
                     ),
-                  ),
-                )
-              : Column(
+                  )
+                : Column(
                   children: [
                     // Address Info - above map
                     Padding(
@@ -271,10 +333,9 @@ class _CompanyAddressesPageState extends State<CompanyAddressesPage> {
                  
                     
                     // Map
-                    SizedBox(
-                      height: 400,
+                    Expanded(
                       child: Container(
-                        margin: EdgeInsets.only(bottom: 16, left: 16, right: 16),
+                        margin: EdgeInsets.only(bottom: 16, left: 16, right: 16, top: 8),
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(12.r),
                           boxShadow: [
@@ -287,19 +348,40 @@ class _CompanyAddressesPageState extends State<CompanyAddressesPage> {
                         ),
                         child: ClipRRect(
                           borderRadius: BorderRadius.circular(12.r),
-                          child: YandexMap(
-                            mapType: MapType.map,
-                            mapObjects: _placemarks,
-                            onMapCreated: (YandexMapController controller) {
-                              _mapController = controller;
-                              if (_addresses.isNotEmpty) {
-                                WidgetsBinding.instance.addPostFrameCallback((_) {
-                                  _moveToAddress(0);
-                                });
-                              }
-                            },
-                            onMapTap: (Point point) {},
-                          ),
+                          child: _addresses.isEmpty || _placemarks.isEmpty
+                              ? Container(
+                                  color: isDark ? Colors.grey[900] : Colors.grey[200],
+                                  child: Center(
+                                    child: Text(
+                                      'Загрузка карты...',
+                                      style: GoogleFonts.poppins(
+                                        fontSize: 14.sp,
+                                        color: subtitleColor,
+                                      ),
+                                    ),
+                                  ),
+                                )
+                              : YandexMap(
+                                  key: ValueKey('map_${_addresses.length}_${_currentIndex}'),
+                                  mapType: MapType.map,
+                                  mapObjects: _placemarks,
+                                  onMapCreated: (YandexMapController controller) {
+                                    _mapController = controller;
+                                    if (_addresses.isNotEmpty) {
+                                      // Fit all addresses on map
+                                      Future.delayed(const Duration(milliseconds: 300), () {
+                                        if (mounted && _mapController != null) {
+                                          if (_addresses.length > 1) {
+                                            _fitAllAddresses();
+                                          } else {
+                                            _moveToAddress(_currentIndex);
+                                          }
+                                        }
+                                      });
+                                    }
+                                  },
+                                  onMapTap: (Point point) {},
+                                ),
                         ),
                       ),
                     ),
@@ -331,6 +413,7 @@ class _CompanyAddressesPageState extends State<CompanyAddressesPage> {
                     ),
                   ],
                 ),
+      ),
     );
   }
 }

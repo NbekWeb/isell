@@ -9,7 +9,7 @@
     
     <application
         android:label="isell"
-        android:name="${applicationName}"
+        android:name="com.nbekdev.isell.MainApplication"
         android:icon="@mipmap/ic_launcher">
         <activity
             android:name=".MainActivity"
