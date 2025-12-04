@@ -3,7 +3,6 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:permission_handler/permission_handler.dart';
 import '../../services/theme_service.dart';
 import '../../services/user_service.dart';
 // import '../../services/api_service.dart'; // TODO: Uncomment when backend is ready
@@ -26,7 +25,6 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _pushNotificationsEnabled = true;
   bool _isLoggedIn = false;
   Map<String, dynamic>? _userData;
-  PermissionStatus _cameraPermissionStatus = PermissionStatus.denied;
 
   @override
   void initState() {
@@ -34,70 +32,9 @@ class _SettingsPageState extends State<SettingsPage> {
     _loadTheme();
     _loadPushNotifications();
     _checkAuthStatus();
-    _checkCameraPermission();
     
     // Test token status on page load
     UserService.testTokenStatus();
-  }
-
-  Future<void> _checkCameraPermission() async {
-    final status = await Permission.camera.status;
-    print('📷 Checking camera permission status: $status');
-    setState(() {
-      _cameraPermissionStatus = status;
-    });
-  }
-
-  Future<void> _handleCameraPermission() async {
-    final status = await Permission.camera.status;
-    print('📷 Camera permission status: $status');
-    print('📷 isGranted: ${status.isGranted}');
-    print('📷 isDenied: ${status.isDenied}');
-    print('📷 isPermanentlyDenied: ${status.isPermanentlyDenied}');
-    print('📷 isRestricted: ${status.isRestricted}');
-    print('📷 isLimited: ${status.isLimited}');
-    
-    if (status.isGranted) {
-      // Permission already granted
-      CustomToast.show(
-        context,
-        message: 'Доступ к камере уже предоставлен',
-        isSuccess: true,
-      );
-      return;
-    }
-    
-    // Always request permission first - this ensures iOS shows it in Settings
-    // On iOS, if status is notDetermined, iOS will show permission modal
-    // If status is denied, request() will not show modal but will register the permission in Settings
-    print('📷 Requesting camera permission...');
-    final result = await Permission.camera.request();
-    print('📷 Camera permission result: $result');
-    setState(() {
-      _cameraPermissionStatus = result;
-    });
-    
-    if (result.isGranted) {
-      CustomToast.show(
-        context,
-        message: 'Доступ к камере предоставлен',
-        isSuccess: true,
-      );
-    } else if (result.isPermanentlyDenied || result.isRestricted) {
-      // If permanently denied or restricted, open settings
-      print('📷 Permission permanently denied/restricted, opening settings...');
-      await openAppSettings();
-    } else {
-      // Permission denied but not permanently - user can try again
-      CustomToast.show(
-        context,
-        message: 'Доступ к камере не предоставлен. Проверьте настройки приложения.',
-        isSuccess: false,
-      );
-    }
-    
-    // Update status
-    await _checkCameraPermission();
   }
 
   Future<void> _checkAuthStatus() async {
@@ -434,72 +371,6 @@ class _SettingsPageState extends State<SettingsPage> {
                     subtitleColor: subtitleColor,
                     iconBgColor: iconBgColor,
                     iconColor: iconColor,
-                  ),
-                  Divider(
-                    height: 1,
-                    thickness: 1,
-                    color: dividerColor,
-                  ),
-                  // Camera Permission
-                  GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTap: _handleCameraPermission,
-                    child: Container(
-                      width: double.infinity,
-                      padding: EdgeInsets.all(16.w),
-                      child: Row(
-                        children: [
-                          Container(
-                            width: 40.w,
-                            height: 40.w,
-                            decoration: BoxDecoration(
-                              color: iconBgColor,
-                              borderRadius: BorderRadius.circular(8.r),
-                            ),
-                            child: Center(
-                              child: Icon(
-                                Icons.camera_alt,
-                                size: 20,
-                                color: iconColor,
-                              ),
-                            ),
-                          ),
-                          SizedBox(width: 16.w),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'Доступ к камере',
-                                  style: GoogleFonts.poppins(
-                                    fontSize: 16.sp,
-                                    fontWeight: FontWeight.w500,
-                                    color: textColor,
-                                  ),
-                                ),
-                                SizedBox(height: 4.h),
-                                Text(
-                                  _cameraPermissionStatus.isGranted
-                                      ? 'Разрешено'
-                                      : _cameraPermissionStatus.isPermanentlyDenied
-                                          ? 'Отклонено'
-                                          : 'Не разрешено',
-                                  style: GoogleFonts.poppins(
-                                    fontSize: 12.sp,
-                                    color: subtitleColor,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          Icon(
-                            Icons.chevron_right,
-                            color: subtitleColor,
-                            size: 24.w,
-                          ),
-                        ],
-                      ),
-                    ),
                   ),
                   Divider(
                     height: 1,

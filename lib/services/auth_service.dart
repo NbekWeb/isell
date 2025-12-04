@@ -145,11 +145,6 @@ class AuthService {
       print('🔵 Verify API Response Data: $data');
 
       if (response.statusCode == 200 || response.statusCode == 201) {
-        // Save tokens to localStorage
-        if (data is Map) {
-          await _saveTokensToStorage(Map<String, dynamic>.from(data));
-        }
-        
         return {
           'success': true,
           'data': data,
@@ -186,87 +181,6 @@ class AuthService {
         'success': false,
         'error': errorMessage,
       };
-    }
-  }
-
-  // Save tokens to localStorage
-  static Future<void> _saveTokensToStorage(Map<String, dynamic> data) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      
-      // Check for different possible token field names
-      String? accessToken;
-      String? refreshToken;
-      
-      print('🔍 All response data keys: ${data.keys.toList()}');
-      
-      // Check if tokens are nested in data.data.tokens structure
-      if (data.containsKey('data') && data['data'] is Map) {
-        final nestedData = data['data'] as Map;
-        print('🔍 Nested data keys: ${nestedData.keys.toList()}');
-        
-        if (nestedData.containsKey('tokens') && nestedData['tokens'] is Map) {
-          final tokens = nestedData['tokens'] as Map;
-          print('🔍 Tokens found in nested structure: ${tokens.keys.toList()}');
-          
-          if (tokens.containsKey('access')) {
-            accessToken = tokens['access']?.toString();
-          }
-          if (tokens.containsKey('refresh')) {
-            refreshToken = tokens['refresh']?.toString();
-          }
-        }
-        
-        // Also save user data if available
-        if (nestedData.containsKey('user')) {
-          final userInfo = nestedData['user'];
-          if (userInfo != null) {
-            await prefs.setString('userInfo', userInfo.toString());
-            print('✅ User info saved to localStorage');
-          }
-        }
-      }
-      
-      // Fallback: Check for tokens at top level
-      if (accessToken == null) {
-        if (data.containsKey('access_token')) {
-          accessToken = data['access_token']?.toString();
-        } else if (data.containsKey('access')) {
-          accessToken = data['access']?.toString();
-        } else if (data.containsKey('token')) {
-          accessToken = data['token']?.toString();
-        }
-      }
-      
-      if (refreshToken == null) {
-        if (data.containsKey('refresh_token')) {
-          refreshToken = data['refresh_token']?.toString();
-        } else if (data.containsKey('refresh')) {
-          refreshToken = data['refresh']?.toString();
-        }
-      }
-      
-      // Save access token
-      if (accessToken != null && accessToken.isNotEmpty) {
-        await prefs.setString('accessToken', accessToken);
-        print('✅ Access token saved to localStorage: ${accessToken.substring(0, 20)}...');
-      } else {
-        print('❌ No access token found in response');
-      }
-      
-      // Save refresh token
-      if (refreshToken != null && refreshToken.isNotEmpty) {
-        await prefs.setString('refreshToken', refreshToken);
-        print('✅ Refresh token saved to localStorage');
-      } else {
-        print('❌ No refresh token found in response');
-      }
-      
-      print('🔍 Access token found: ${accessToken != null}');
-      print('🔍 Refresh token found: ${refreshToken != null}');
-      
-    } catch (e) {
-      print('❌ Error saving tokens to localStorage: $e');
     }
   }
 

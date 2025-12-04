@@ -21,16 +21,18 @@ class SmsCodePage extends StatefulWidget {
   State<SmsCodePage> createState() => _SmsCodePageState();
 }
 
-class _SmsCodePageState extends State<SmsCodePage> {
+class _SmsCodePageState extends State<SmsCodePage> with WidgetsBindingObserver {
   final List<TextEditingController> _controllers = List.generate(4, (index) => TextEditingController());
   final List<FocusNode> _focusNodes = List.generate(4, (index) => FocusNode());
   bool _isLoading = false;
   bool _isResending = false;
   bool _isMyIdInProgress = false; // Track if MyID verification is in progress
+  bool _waitingForPermissionFromSettings = false; // Track if we're waiting for permission from settings
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     // Focus on first input
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _focusNodes[0].requestFocus();
@@ -39,6 +41,7 @@ class _SmsCodePageState extends State<SmsCodePage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     for (var controller in _controllers) {
       controller.dispose();
     }
@@ -46,6 +49,35 @@ class _SmsCodePageState extends State<SmsCodePage> {
       focusNode.dispose();
     }
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    // When app resumes from settings, check camera permission again
+    if (state == AppLifecycleState.resumed && _waitingForPermissionFromSettings) {
+      print('🔵 [SMS Code Page] App resumed, checking camera permission again...');
+      _waitingForPermissionFromSettings = false;
+      // Wait a bit for permission status to update
+      Future.delayed(const Duration(milliseconds: 500), () async {
+        if (mounted) {
+          final cameraStatus = await Permission.camera.status;
+          print('   - cameraStatus after resume: $cameraStatus');
+          if (cameraStatus.isGranted) {
+            print('✅ [SMS Code Page] Camera permission granted after returning from settings');
+            // Permission granted, continue with MyID verification
+            if (!_isMyIdInProgress) {
+              await _startMyIdVerification();
+            }
+          } else {
+            print('❌ [SMS Code Page] Camera permission still not granted');
+            setState(() {
+              _isMyIdInProgress = false;
+            });
+          }
+        }
+      });
+    }
   }
 
   void _onCodeChanged(String value, int index) {
@@ -61,11 +93,13 @@ class _SmsCodePageState extends State<SmsCodePage> {
   }
 
   void _onCodeDeleted(int index) {
-      if (index > 0) {
-      // Move to previous input
-        _focusNodes[index - 1].requestFocus();
-      }
+    // Clear current input
+    _controllers[index].clear();
+    // Move to previous input
+    if (index > 0) {
+      _focusNodes[index - 1].requestFocus();
     }
+  }
 
   String _getEnteredCode() {
     return _controllers.map((controller) => controller.text).join();
@@ -114,64 +148,15 @@ class _SmsCodePageState extends State<SmsCodePage> {
         print('   - responseData: $responseData');
         print('   - responseData type: ${responseData.runtimeType}');
         
-        // Check if data is empty - then MyID verification is required
-        bool needsMyId = false;
-        if (responseData == null) {
-          print('   - responseData is null, MyID verification needed');
-          needsMyId = true;
-        } else if (responseData is Map && responseData.isEmpty) {
-          print('   - responseData is empty Map, MyID verification needed');
-          needsMyId = true;
-        } else if (responseData is Map && responseData['data'] != null && (responseData['data'] as Map).isEmpty) {
-          print('   - responseData["data"] is empty Map, MyID verification needed');
-          needsMyId = true;
-        } else {
-          print('   - responseData contains data, no MyID verification needed');
-        }
+        print('🔵 [SMS Code Page] Proceeding with MyID verification regardless of SMS response payload');
+        CustomToast.show(
+          context,
+          message: 'SMS код подтвержден. Запуск MyID верификации...',
+          isSuccess: true,
+        );
         
-        if (needsMyId) {
-          print('🔵 [SMS Code Page] MyID verification required, starting...');
-          print('   - _isMyIdInProgress before: $_isMyIdInProgress');
-          
-          CustomToast.show(
-            context,
-            message: 'SMS код подтвержден. Запуск MyID верификации...',
-            isSuccess: true,
-          );
-          
-          // Start MyID verification process
-          await _startMyIdVerification();
-          
-          print('   - _isMyIdInProgress after _startMyIdVerification: $_isMyIdInProgress');
-        } else {
-          print('✅ [SMS Code Page] Full authentication completed, saving tokens...');
-          // Full authentication completed - data contains tokens
-          // Save tokens and user data
-          await _saveTokensFromResponse({'data': responseData});
-          
-          // Fetch fresh user data from API
-          print('🔵 [SMS Code Page] Fetching fresh user data from API...');
-          final userResult = await UserService.getCurrentUser();
-          if (userResult != null && userResult['success'] == true) {
-            print('✅ [SMS Code Page] User data fetched after SMS verification');
-          } else {
-            print('⚠️ [SMS Code Page] Failed to fetch user data');
-          }
-          
-          CustomToast.show(
-            context,
-            message: 'Авторизация успешна!',
-            isSuccess: true,
-          );
-
-          // Navigate to main layout (named route so theme callback works)
-          print('🚀 [SMS Code Page] Navigating to /home');
-          Navigator.of(context).pushNamedAndRemoveUntil(
-            '/home',
-            (route) => false,
-          );
-          print('✅ [SMS Code Page] Navigation completed');
-        }
+        await _startMyIdVerification();
+        print('   - _isMyIdInProgress after _startMyIdVerification: $_isMyIdInProgress');
       } else {
         print('❌ [SMS Code Page] SMS code verification FAILED');
         final errorMessage = result?['error'] ?? 'Неверный код';
@@ -303,28 +288,17 @@ class _SmsCodePageState extends State<SmsCodePage> {
                         setState(() {
                           _isMyIdInProgress = false;
                         });
-                        if (mounted) {
-                          Navigator.of(context).pushNamedAndRemoveUntil(
-                            '/home',
-                            (route) => false,
-                          );
-                        }
                       },
                       child: const Text('Отмена'),
                     ),
                     TextButton(
                       onPressed: () async {
                         Navigator.of(context).pop();
-                        await openAppSettings();
                         setState(() {
+                          _waitingForPermissionFromSettings = true;
                           _isMyIdInProgress = false;
                         });
-                        if (mounted) {
-                          Navigator.of(context).pushNamedAndRemoveUntil(
-                            '/home',
-                            (route) => false,
-                          );
-                        }
+                        await openAppSettings();
                       },
                       child: const Text('Настройки'),
                     ),
@@ -363,25 +337,17 @@ class _SmsCodePageState extends State<SmsCodePage> {
                     TextButton(
                       onPressed: () {
                         Navigator.of(context).pop();
-                        if (mounted) {
-                          Navigator.of(context).pushNamedAndRemoveUntil(
-                            '/home',
-                            (route) => false,
-                          );
-                        }
                       },
                       child: const Text('Отмена'),
                     ),
                     TextButton(
                       onPressed: () async {
                         Navigator.of(context).pop();
+                        setState(() {
+                          _waitingForPermissionFromSettings = true;
+                          _isMyIdInProgress = false;
+                        });
                         await openAppSettings();
-                        if (mounted) {
-                          Navigator.of(context).pushNamedAndRemoveUntil(
-                            '/home',
-                            (route) => false,
-                          );
-                        }
                       },
                       child: const Text('Настройки'),
                     ),
@@ -1013,49 +979,58 @@ class _SmsCodePageState extends State<SmsCodePage> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: List.generate(4, (index) {
-                    return Container(
-                      width: 60.w,
-                      height: 60.h,
-                      decoration: BoxDecoration(
-                        color: inputFillColor,
-                        border: Border.all(
-                          color: inputBorderColor ?? Colors.grey,
-                          width: 1.5,
+                    return Focus(
+                      onKeyEvent: (node, event) {
+                        // Handle backspace when input is empty
+                        if (event is KeyDownEvent && 
+                            event.logicalKey == LogicalKeyboardKey.backspace &&
+                            _controllers[index].text.isEmpty &&
+                            index > 0) {
+                          _onCodeDeleted(index);
+                          return KeyEventResult.handled;
+                        }
+                        return KeyEventResult.ignored;
+                      },
+                      child: Container(
+                        width: 60.w,
+                        height: 60.h,
+                        decoration: BoxDecoration(
+                          color: inputFillColor,
+                          border: Border.all(
+                            color: inputBorderColor ?? Colors.grey,
+                            width: 1.5,
+                          ),
+                          borderRadius: BorderRadius.circular(12.r),
                         ),
-                        borderRadius: BorderRadius.circular(12.r),
-                      ),
-                      child: TextFormField(
-                        controller: _controllers[index],
-                        focusNode: _focusNodes[index],
-                        textAlign: TextAlign.center,
-                        style: GoogleFonts.poppins(
-                          fontSize: 24.sp,
-                          fontWeight: FontWeight.w600,
-                          color: textColor,
-                        ),
-                        keyboardType: TextInputType.number,
-                        inputFormatters: [
-                          FilteringTextInputFormatter.digitsOnly,
-                          LengthLimitingTextInputFormatter(1),
-                        ],
-                        decoration: const InputDecoration(
-                          border: InputBorder.none,
-                          counterText: '',
-                        ),
-                        onChanged: (value) {
-                          if (value.isNotEmpty) {
-                            _onCodeChanged(value, index);
-                          } else {
-                            // Handle backspace - move to previous input
-                            if (index > 0) {
-                              _onCodeDeleted(index);
+                        child: TextFormField(
+                          controller: _controllers[index],
+                          focusNode: _focusNodes[index],
+                          textAlign: TextAlign.center,
+                          style: GoogleFonts.poppins(
+                            fontSize: 24.sp,
+                            fontWeight: FontWeight.w600,
+                            color: textColor,
+                          ),
+                          keyboardType: TextInputType.number,
+                          inputFormatters: [
+                            FilteringTextInputFormatter.digitsOnly,
+                            LengthLimitingTextInputFormatter(1),
+                          ],
+                          decoration: const InputDecoration(
+                            border: InputBorder.none,
+                            counterText: '',
+                          ),
+                          onChanged: (value) {
+                            if (value.isNotEmpty) {
+                              _onCodeChanged(value, index);
+                            } else {
+                              // Handle backspace - clear current and move to previous input
+                              if (index > 0) {
+                                _onCodeDeleted(index);
+                              }
                             }
-                          }
-                        },
-                        onTap: () {
-                          // Clear current input when tapped
-                          _controllers[index].clear();
-                        },
+                          },
+                        ),
                       ),
                     );
                   }),
