@@ -321,4 +321,61 @@ class ProductServices {
       return null;
     }
   }
+
+  static Future<Map<String, dynamic>?> calculateScheduleSimple({
+    required int calculationMode,
+    int? tariffId,
+    double? totalAdvancePayment,
+    List<Map<String, dynamic>>? productList,
+  }) async {
+    try {
+      final data = <String, dynamic>{'calculation_mode': calculationMode};
+
+      if (calculationMode == 1) {
+        if (tariffId != null) data['tariff_id'] = tariffId;
+        // Convert double to int for total_advance_payment
+        if (totalAdvancePayment != null) {
+          data['total_advance_payment'] = totalAdvancePayment.toInt();
+        }
+
+        // Add product_list for simple mode but without tariff_id and advance_payment
+        if (productList != null) {
+          final simpleProductList = productList.map((item) {
+            final Map<String, dynamic> simpleItem = {
+              'product_id': item['product_id'],
+              'quantity': item['quantity'],
+            };
+            // Add variation_id if it exists
+            if (item['variation_id'] != null) {
+              simpleItem['variation_id'] = item['variation_id'];
+            }
+            return simpleItem;
+          }).toList();
+          data['product_list'] = simpleProductList;
+        }
+      } else if (calculationMode == 2) {
+        if (productList != null) data['product_list'] = productList;
+      }
+
+      print('🔵 Calculate Schedule Simple Request Body: $data');
+      print('🔵 Request Body JSON: ${jsonEncode(data)}');
+      
+      final Response response = await ApiService.request(
+        url: 'product/calculate-schedule-simple/',
+        method: 'POST',
+        data: data,
+      );
+      
+      print('📥 Calculate Schedule Simple Response Status: ${response.statusCode}');
+      print('📥 Calculate Schedule Simple Response Data: ${response.data}');
+
+      if (response.statusCode == 200) {
+        return response.data;
+      }
+      return null;
+    } catch (e) {
+      print('❌ Error calculating schedule simple: $e');
+      return null;
+    }
+  }
 }

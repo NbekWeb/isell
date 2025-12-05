@@ -43,10 +43,14 @@ class _CartPageState extends State<CartPage>
   double _globalDownPayment = 0.0;
   late TextEditingController _globalDownPaymentController;
   Timer? _downPaymentDebounceTimer;
+  Timer? _scheduleDebounceTimer;
+  bool _isScheduleCalculating = false;
   
   // Complex mode values (stored per item)
   Map<String, Map<String, dynamic>?> _itemTariffs = {};
   Map<String, double> _itemDownPayments = {};
+  Map<String, TextEditingController> _itemDownPaymentControllers = {};
+  Map<String, FocusNode> _itemDownPaymentFocusNodes = {};
   
   // Storage instance
   static const FlutterSecureStorage _storage = FlutterSecureStorage();
@@ -63,6 +67,9 @@ class _CartPageState extends State<CartPage>
   Timer? _checkTimer;
   int _remainingSeconds = 0;
   bool _isChecking = false;
+  
+  // Flag to control if schedule should be calculated on cart load
+  bool _shouldCalculateOnLoad = true;
 
   @override
   void initState() {
@@ -134,10 +141,20 @@ class _CartPageState extends State<CartPage>
             _isChecking = false;
             _canBuy = true;
           });
-          // Don't close modal here - let modal timer handle it
+          // Save that timer expired
+          _saveCheckingTimeExpired();
         }
       }
     });
+  }
+
+  Future<void> _saveCheckingTimeExpired() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('lastChecking');
+    } catch (e) {
+      print('❌ Error saving checking time expired: $e');
+    }
   }
 
   Future<void> _saveCheckingTime() async {
@@ -158,8 +175,18 @@ class _CartPageState extends State<CartPage>
   @override
   void dispose() {
     _downPaymentDebounceTimer?.cancel();
+    _scheduleDebounceTimer?.cancel();
     _checkTimer?.cancel();
     _globalDownPaymentController.dispose();
+    // Dispose all item controllers
+    for (final controller in _itemDownPaymentControllers.values) {
+      controller.dispose();
+    }
+    for (final focusNode in _itemDownPaymentFocusNodes.values) {
+      focusNode.dispose();
+    }
+    _itemDownPaymentControllers.clear();
+    _itemDownPaymentFocusNodes.clear();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -190,10 +217,20 @@ class _CartPageState extends State<CartPage>
   // Load payment schedule from storage
   Future<void> _loadPaymentSchedule() async {
     try {
-      final scheduleJson = await _storage.read(key: 'payment_schedule');
       final canBuyJson = await _storage.read(key: 'can_buy');
       final savedCartCountJson = await _storage.read(key: 'saved_cart_count');
       final savedCartQuantitiesJson = await _storage.read(key: 'saved_cart_quantities');
+      
+      // Load saved calculation mode (simple/complex)
+      final savedCalculationModeJson = await _storage.read(key: 'saved_calculation_mode');
+      if (savedCalculationModeJson != null) {
+        final savedMode = json.decode(savedCalculationModeJson) as bool;
+        if (mounted) {
+          setState(() {
+            _isSimpleMode = savedMode;
+          });
+        }
+      }
       
       // Load saved cart state
       int? savedCartCount;
@@ -263,6 +300,18 @@ class _CartPageState extends State<CartPage>
           // Restore item down payments (this is restoration, not a change)
           for (final entry in savedItemDownPayments.entries) {
             _itemDownPayments[entry.key] = entry.value;
+            
+            // Update controller if exists
+            if (_itemDownPaymentControllers.containsKey(entry.key)) {
+              final controller = _itemDownPaymentControllers[entry.key]!;
+              final focusNode = _itemDownPaymentFocusNodes[entry.key]!;
+              if (!focusNode.hasFocus) {
+                final text = entry.value == 0 ? '' : entry.value.toInt().toString();
+                if (controller.text != text) {
+                  controller.text = text;
+                }
+              }
+            }
           }
         }
         
@@ -275,11 +324,17 @@ class _CartPageState extends State<CartPage>
           final currentTariffId = _selectedGlobalTariff?['id'] as int?;
           if (currentTariffId != savedGlobalTariffId) {
             // Restore global tariff
-            final tariff = _tariffs.firstWhere(
-              (t) => t['id'] == savedGlobalTariffId,
-              orElse: () => _tariffs.first,
-            );
-            _selectedGlobalTariff = tariff;
+            try {
+              final tariff = _tariffs.firstWhere(
+                (t) => t['id'] == savedGlobalTariffId,
+              );
+              _selectedGlobalTariff = tariff;
+            } catch (e) {
+              // Tariff not found, use first one
+              if (_tariffs.isNotEmpty) {
+                _selectedGlobalTariff = _tariffs.first;
+              }
+            }
           }
         }
         
@@ -289,11 +344,17 @@ class _CartPageState extends State<CartPage>
           
           // Restore item tariffs
           for (final entry in savedItemTariffIds.entries) {
-            final tariff = _tariffs.firstWhere(
-              (t) => t['id'] == entry.value,
-              orElse: () => _tariffs.first,
-            );
-            _itemTariffs[entry.key] = tariff;
+            try {
+              final tariff = _tariffs.firstWhere(
+                (t) => t['id'] == entry.value,
+              );
+              _itemTariffs[entry.key] = tariff;
+            } catch (e) {
+              // Tariff not found, use first one
+              if (_tariffs.isNotEmpty) {
+                _itemTariffs[entry.key] = _tariffs.first;
+              }
+            }
           }
         }
         
@@ -358,28 +419,105 @@ class _CartPageState extends State<CartPage>
           print('🔄 Cart or down payment changed since last save, clearing payment schedule');
           await _clearPaymentSchedule();
         } else {
-          // Load payment schedule if nothing changed
-          if (scheduleJson != null) {
-            _paymentSchedule = Map<String, dynamic>.from(
-              json.decode(scheduleJson) as Map
-            );
-          }
-          
+          // Don't load schedule from storage - it will be loaded from API on mounted
+          // Only load can_buy and checking state if exists (from calculate-schedule API)
           if (canBuyJson != null) {
             _canBuy = json.decode(canBuyJson) as bool;
           }
+          // Load checking state if exists
+          await _loadLastCheckingTime();
         }
       } else {
-        // No saved cart state, just load payment schedule if exists
-        if (scheduleJson != null) {
-          _paymentSchedule = Map<String, dynamic>.from(
-            json.decode(scheduleJson) as Map
-          );
+        // No saved cart state, but still load saved choices
+        // Load saved calculation mode
+        final savedCalculationModeJson = await _storage.read(key: 'saved_calculation_mode');
+        if (savedCalculationModeJson != null) {
+          final savedMode = json.decode(savedCalculationModeJson) as bool;
+          if (mounted) {
+            setState(() {
+              _isSimpleMode = savedMode;
+            });
+          }
         }
         
+        // Load and restore down payment state
+        final savedGlobalDownPaymentJson = await _storage.read(key: 'saved_global_down_payment');
+        final savedItemDownPaymentsJson = await _storage.read(key: 'saved_item_down_payments');
+        
+        if (savedGlobalDownPaymentJson != null) {
+          final savedGlobalDownPayment = (json.decode(savedGlobalDownPaymentJson) as num).toDouble();
+          _globalDownPayment = savedGlobalDownPayment;
+          if (_globalDownPaymentController.text.isEmpty || 
+              int.tryParse(_globalDownPaymentController.text.replaceAll(RegExp(r'[^\d]'), '')) != _globalDownPayment.toInt()) {
+            _globalDownPaymentController.text = _globalDownPayment.toInt().toString();
+          }
+        }
+        
+        if (savedItemDownPaymentsJson != null) {
+          final decoded = json.decode(savedItemDownPaymentsJson) as Map;
+          final savedItemDownPayments = decoded.map((key, value) => MapEntry(key.toString(), (value as num).toDouble()));
+          
+          for (final entry in savedItemDownPayments.entries) {
+            _itemDownPayments[entry.key] = entry.value;
+            
+            // Update controller if exists
+            if (_itemDownPaymentControllers.containsKey(entry.key)) {
+              final controller = _itemDownPaymentControllers[entry.key]!;
+              final focusNode = _itemDownPaymentFocusNodes[entry.key]!;
+              if (!focusNode.hasFocus) {
+                final text = entry.value == 0 ? '' : entry.value.toInt().toString();
+                if (controller.text != text) {
+                  controller.text = text;
+                }
+              }
+            }
+          }
+        }
+        
+        // Load and restore tariff state
+        final savedGlobalTariffIdJson = await _storage.read(key: 'saved_global_tariff_id');
+        final savedItemTariffIdsJson = await _storage.read(key: 'saved_item_tariff_ids');
+        
+        if (savedGlobalTariffIdJson != null && _tariffs.isNotEmpty) {
+          final savedGlobalTariffId = json.decode(savedGlobalTariffIdJson) as int;
+          try {
+            final tariff = _tariffs.firstWhere(
+              (t) => t['id'] == savedGlobalTariffId,
+            );
+            _selectedGlobalTariff = tariff;
+          } catch (e) {
+            // Tariff not found, use first one
+            if (_tariffs.isNotEmpty) {
+              _selectedGlobalTariff = _tariffs.first;
+            }
+          }
+        }
+        
+        if (savedItemTariffIdsJson != null && _tariffs.isNotEmpty) {
+          final decoded = json.decode(savedItemTariffIdsJson) as Map;
+          final savedItemTariffIds = decoded.map((key, value) => MapEntry(key.toString(), value as int));
+          
+          for (final entry in savedItemTariffIds.entries) {
+            try {
+              final tariff = _tariffs.firstWhere(
+                (t) => t['id'] == entry.value,
+              );
+              _itemTariffs[entry.key] = tariff;
+            } catch (e) {
+              // Tariff not found, use first one
+              if (_tariffs.isNotEmpty) {
+                _itemTariffs[entry.key] = _tariffs.first;
+              }
+            }
+          }
+        }
+        
+        // Only load can_buy and checking state if exists (from calculate-schedule API)
         if (canBuyJson != null) {
           _canBuy = json.decode(canBuyJson) as bool;
         }
+        // Load checking state if exists
+        await _loadLastCheckingTime();
       }
       
       if (mounted) {
@@ -425,6 +563,9 @@ class _CartPageState extends State<CartPage>
         }
       }
       await _storage.write(key: 'saved_item_tariff_ids', value: json.encode(savedItemTariffs));
+      
+      // Save calculation mode (simple/complex)
+      await _storage.write(key: 'saved_calculation_mode', value: json.encode(_isSimpleMode));
       
       // Check ability to order and status
       final abilityToOrder = schedule['ability_to_order'] as bool? ?? false;
@@ -570,8 +711,20 @@ class _CartPageState extends State<CartPage>
       _isLoading = false;
     });
     
-    // Load payment schedule after cart items are loaded
+    // Ensure tariffs are loaded before loading payment schedule
+    if (_tariffs.isEmpty) {
+      await _fetchTariffs();
+    }
+    
+    // Load payment schedule after cart items and tariffs are loaded
     await _loadPaymentSchedule();
+    
+    // Call schedule simple API if products exist and mounted, and flag is set
+    if (mounted && cartItems.isNotEmpty && _shouldCalculateOnLoad) {
+      _calculateScheduleSimple();
+    }
+    // Reset flag after first load
+    _shouldCalculateOnLoad = false;
   }
 
   Future<void> _fetchTariffs() async {
@@ -639,12 +792,57 @@ class _CartPageState extends State<CartPage>
       await CartService.updateQuantity(uniqueId, newQuantity);
     }
 
+    // Prevent automatic calculation in _loadCartItems
+    _shouldCalculateOnLoad = false;
     await _loadCartItems();
+    
+    // Trigger schedule calculation with debounce when quantity changes
+    if (mounted && cartItems.isNotEmpty) {
+      _scheduleCalculateDebounced();
+    }
   }
 
   Future<void> _removeItem(String uniqueId) async {
+    // Prevent automatic calculation in _loadCartItems
+    _shouldCalculateOnLoad = false;
+    
+    // Dispose controller and focus node for removed item
+    _itemDownPaymentControllers[uniqueId]?.dispose();
+    _itemDownPaymentFocusNodes[uniqueId]?.dispose();
+    _itemDownPaymentControllers.remove(uniqueId);
+    _itemDownPaymentFocusNodes.remove(uniqueId);
+    
+    // Remove item-specific data (down payment and tariff)
+    _itemDownPayments.remove(uniqueId);
+    _itemTariffs.remove(uniqueId);
+    
+    // Update storage - remove item from saved data
+    final savedItemDownPayments = <String, double>{};
+    for (final entry in _itemDownPayments.entries) {
+      savedItemDownPayments[entry.key] = entry.value;
+    }
+    await _storage.write(key: 'saved_item_down_payments', value: json.encode(savedItemDownPayments));
+    
+    final savedItemTariffs = <String, int>{};
+    for (final entry in _itemTariffs.entries) {
+      if (entry.value != null) {
+        savedItemTariffs[entry.key] = entry.value!['id'] as int;
+      }
+    }
+    await _storage.write(key: 'saved_item_tariff_ids', value: json.encode(savedItemTariffs));
+    
     await CartService.removeFromCart(uniqueId);
     await _loadCartItems();
+    
+    // Trigger schedule calculation with debounce when item is removed
+    if (mounted && cartItems.isNotEmpty) {
+      _scheduleCalculateDebounced();
+    } else if (mounted) {
+      // Clear schedule if cart is empty
+      setState(() {
+        _paymentSchedule = null;
+      });
+    }
   }
 
 
@@ -656,6 +854,41 @@ class _CartPageState extends State<CartPage>
           : int.tryParse(item['quantity'].toString()) ?? 0;
       return sum + (price * quantity);
     });
+  }
+
+  double _calculateTotalAmount() {
+    // Calculate total: if payment schedule exists, use total_advance_payment + sum of monthly payments
+    // Otherwise, use calculated total from cart items
+    if (_paymentSchedule != null) {
+      final totalAdvancePayment = (_paymentSchedule!['total_advance_payment'] as num?)?.toDouble() ?? 
+          (_isSimpleMode ? _globalDownPayment : (_itemDownPayments.values.fold<double>(0.0, (sum, value) => sum + value)));
+      final monthlyPayments = _paymentSchedule!['monthly_payments'] as List? ?? [];
+      double monthlyPaymentsSum = 0.0;
+      for (final payment in monthlyPayments) {
+        if (payment is Map && payment['payment'] != null) {
+          monthlyPaymentsSum += (payment['payment'] as num).toDouble();
+        }
+      }
+      return totalAdvancePayment + monthlyPaymentsSum;
+    } else {
+      return _calculateTotal();
+    }
+  }
+
+  double _calculateAdvancePayment() {
+    if (_isSimpleMode) {
+      return _globalDownPayment;
+    } else {
+      // Complex mode: sum of all item down payments
+      return _itemDownPayments.values.fold(0.0, (sum, value) => sum + value);
+    }
+  }
+
+  double _calculateMonthlyPayment() {
+    if (!_isSimpleMode || _selectedGlobalTariff == null) return 0.0;
+    final total = _calculateTotalAmount();
+    final advancePayment = _calculateAdvancePayment();
+    return _calculateMonthlyPaymentFromTariff(total, _selectedGlobalTariff, advancePayment);
   }
 
   double _parsePriceValue(dynamic value) {
@@ -675,6 +908,22 @@ class _CartPageState extends State<CartPage>
     final sanitized = str.replaceAll(RegExp(r'[^\d.]'), '');
     if (sanitized.isEmpty) return 0.0;
     return double.tryParse(sanitized) ?? 0.0;
+  }
+
+  // Calculate total monthly payments sum
+  double _calculateTotalMonthlyPayments(List monthlyPayments) {
+    double total = 0.0;
+    for (final payment in monthlyPayments) {
+      if (payment is Map && payment['payment'] != null) {
+        final amount = payment['payment'];
+        if (amount is num) {
+          total += amount.toDouble();
+        } else if (amount is String) {
+          total += double.tryParse(amount) ?? 0.0;
+        }
+      }
+    }
+    return total;
   }
 
   String _formatUsdAmount(double usdValue) {
@@ -775,10 +1024,19 @@ class _CartPageState extends State<CartPage>
               SizedBox(width: 8.w),
               Switch(
                 value: !_isSimpleMode, // Switch is ON for complex mode
-                onChanged: (bool value) {
+                onChanged: (bool value) async {
                   setState(() {
                     _isSimpleMode = !value;
                   });
+                  
+                  // Save calculation mode to storage
+                  await _storage.write(key: 'saved_calculation_mode', value: json.encode(_isSimpleMode));
+                  
+                  // Trigger schedule calculation with debounce when mode changes
+                  // Works for both simple and complex modes
+                  if (cartItems.isNotEmpty) {
+                    _scheduleCalculateDebounced();
+                  }
                 },
                 activeColor: const Color(0xFF4E63EC),
                 activeTrackColor: const Color(0xFF4E63EC).withOpacity(0.3),
@@ -800,7 +1058,23 @@ class _CartPageState extends State<CartPage>
   }
 
   Widget _buildSimpleModeCalculation(Color textColor, Color cardColor) {
-    final total = _calculateTotal();
+    // Calculate total: if payment schedule exists, use total_advance_payment + sum of monthly payments
+    // Otherwise, use calculated total from cart items
+    double total;
+    if (_paymentSchedule != null) {
+      // Simple API doesn't return total_advance_payment, so use _globalDownPayment
+      final totalAdvancePayment = (_paymentSchedule!['total_advance_payment'] as num?)?.toDouble() ?? _globalDownPayment;
+      final monthlyPayments = _paymentSchedule!['monthly_payments'] as List? ?? [];
+      double monthlyPaymentsSum = 0.0;
+      for (final payment in monthlyPayments) {
+        if (payment is Map && payment['payment'] != null) {
+          monthlyPaymentsSum += (payment['payment'] as num).toDouble();
+        }
+      }
+      total = totalAdvancePayment + monthlyPaymentsSum;
+    } else {
+      total = _calculateTotal();
+    }
     final monthlyPayment = _calculateMonthlyPaymentFromTariff(total, _selectedGlobalTariff, _globalDownPayment);
     
     return Container(
@@ -909,7 +1183,7 @@ class _CartPageState extends State<CartPage>
                 final total = _calculateTotal();
                 
                 // Start debounce timer
-                _downPaymentDebounceTimer = Timer(const Duration(milliseconds: 300), () {
+                _downPaymentDebounceTimer = Timer(const Duration(milliseconds: 300), () async {
                   if (!mounted) return;
                   
                   final cleanValue = _globalDownPaymentController.text.replaceAll(RegExp(r'[^\d]'), '');
@@ -939,6 +1213,14 @@ class _CartPageState extends State<CartPage>
                 setState(() {
                       _globalDownPayment = clampedValue.toDouble();
                     });
+                    
+                    // Save down payment to storage
+                    await _storage.write(key: 'saved_global_down_payment', value: json.encode(_globalDownPayment));
+                    
+                    // Trigger schedule calculation with debounce when down payment changes
+                    if (cartItems.isNotEmpty) {
+                      _scheduleCalculateDebounced();
+                    }
                   }
                 });
               },
@@ -1002,50 +1284,43 @@ class _CartPageState extends State<CartPage>
             ),
           ),
           
-          SizedBox(height: 20.h),
-          
-          // Summary
-          Container(
-            padding: EdgeInsets.all(12.w),
-            decoration: BoxDecoration(
-              color: const Color(0xFF1B7EFF).withOpacity(0.1),
-              borderRadius: BorderRadius.circular(8.r),
-            ),
-            child: Column(
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      'Итого',
-                      style: GoogleFonts.poppins(
-                        fontSize: 16.sp,
-                        fontWeight: FontWeight.w600,
-                        color: textColor,
-                      ),
-                    ),
-                  ],
-                ),
-                SizedBox(height: 8.h),
-                _buildSummaryRow('Общая сумма:', _formatUsdAmount(total), textColor),
-                _buildSummaryRow('Первоначальный взнос:', _formatUsdAmount(_globalDownPayment), textColor),
-              ],
-            ),
-          ),
         ],
       ),
     );
   }
 
-  Widget _buildComplexModeCalculation(Color textColor, Color cardColor) {
-    // Get the first item's tariff as global for complex mode
-    final firstItemId = cartItems.isNotEmpty ? cartItems.first['uniqueId'] as String : '';
-    Map<String, dynamic>? globalTariff = _itemTariffs[firstItemId];
-    if (globalTariff == null && _tariffs.isNotEmpty) {
-      globalTariff = _tariffs.first;
-      _itemTariffs[firstItemId] = globalTariff;
+  Widget _buildItogoSection(Color textColor, Color cardColor) {
+    // Calculate total
+    double total;
+    if (_paymentSchedule != null) {
+      final totalAdvancePayment = (_paymentSchedule!['total_advance_payment'] as num?)?.toDouble() ?? 
+          (_isSimpleMode ? _globalDownPayment : (_itemDownPayments.values.isNotEmpty ? _itemDownPayments.values.first : 0.0));
+      final monthlyPayments = _paymentSchedule!['monthly_payments'] as List? ?? [];
+      double monthlyPaymentsSum = 0.0;
+      for (final payment in monthlyPayments) {
+        if (payment is Map && payment['payment'] != null) {
+          monthlyPaymentsSum += (payment['payment'] as num).toDouble();
+        }
+      }
+      total = totalAdvancePayment + monthlyPaymentsSum;
+    } else {
+      total = _calculateTotal();
     }
-    final globalDownPayment = _itemDownPayments[firstItemId] ?? 0.0;
+    
+    // Calculate advance payment
+    double advancePayment;
+    if (_isSimpleMode) {
+      advancePayment = _globalDownPayment;
+    } else {
+      // Complex mode: sum of all item down payments
+      advancePayment = _itemDownPayments.values.fold(0.0, (sum, value) => sum + value);
+    }
+    
+    // Calculate monthly payment (only for simple mode)
+    double? monthlyPayment;
+    if (_isSimpleMode && _selectedGlobalTariff != null) {
+      monthlyPayment = _calculateMonthlyPaymentFromTariff(total, _selectedGlobalTariff, advancePayment);
+    }
     
     return Container(
       margin: EdgeInsets.symmetric(vertical: 16.h),
@@ -1064,111 +1339,29 @@ class _CartPageState extends State<CartPage>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Down Payment Section
           Text(
-            'Первоначальный взнос',
+            'Итого',
             style: GoogleFonts.poppins(
-              fontSize: 16.sp,
+              fontSize: 18.sp,
               fontWeight: FontWeight.w600,
               color: textColor,
             ),
           ),
           SizedBox(height: 12.h),
-          Container(
-            width: double.infinity,
-            decoration: BoxDecoration(
-              color: Colors.transparent,
-              border: Border.all(color: textColor, width: 1),
-              borderRadius: BorderRadius.circular(12.r),
-            ),
-            child: TextFormField(
-              initialValue: globalDownPayment == 0.0 ? '' : globalDownPayment.toInt().toString(),
-              keyboardType: TextInputType.number,
-              inputFormatters: [
-                FilteringTextInputFormatter.digitsOnly,
-                LengthLimitingTextInputFormatter(10),
-              ],
-              textAlign: TextAlign.center,
+          _buildSummaryRow('Общая сумма:', _formatUsdAmount(total), textColor),
+          _buildSummaryRow('Первоначальный взнос:', _formatUsdAmount(advancePayment), textColor),
+          // Show "В рассрочку" only for simple mode
+          if (_isSimpleMode && monthlyPayment != null && monthlyPayment > 0) ...[
+            SizedBox(height: 8.h),
+            Text(
+              'В рассрочку ${_formatUsdAmount(monthlyPayment)} в месяц',
               style: GoogleFonts.poppins(
-                color: textColor,
                 fontSize: 16.sp,
-                fontWeight: FontWeight.w500,
-              ),
-              decoration: InputDecoration(
-                border: InputBorder.none,
-                contentPadding: EdgeInsets.symmetric(vertical: 12.h, horizontal: 16.w),
-                hintText: '0',
-                hintStyle: GoogleFonts.poppins(
-                  color: textColor.withOpacity(0.5),
-                  fontSize: 16.sp,
-                ),
-                prefixText: '\$',
-                prefixStyle: GoogleFonts.poppins(
-color: textColor,
-                  fontSize: 16.sp,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-              onTapOutside: (event) {
-                // Close keyboard when tapping outside
-                FocusScope.of(context).unfocus();
-              },
-              onChanged: (value) {
-                final cleanValue = value.replaceAll(RegExp(r'[^\d]'), '');
-                final intValue = cleanValue.isEmpty ? 0 : int.tryParse(cleanValue) ?? 0;
-                setState(() {
-                  // Apply the same down payment to all items in complex mode
-                  final downPayment = intValue.toDouble();
-                  for (final item in cartItems) {
-                    final uniqueId = item['uniqueId'] as String;
-                    _itemDownPayments[uniqueId] = downPayment;
-                  }
-                });
-              },
-            ),
-          ),
-          
-          SizedBox(height: 20.h),
-          
-          // Tariff Section
-          Text(
-            'Срок рассрочки',
-            style: GoogleFonts.poppins(
-              fontSize: 16.sp,
-              fontWeight: FontWeight.w600,
-              color: textColor,
-            ),
-          ),
-          SizedBox(height: 12.h),
-          GestureDetector(
-            onTap: () => _showTariffModal(context, firstItemId, globalTariff),
-            child: Container(
-              width: double.infinity,
-              padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 16.h),
-              decoration: BoxDecoration(
-                border: Border.all(color: Colors.grey[300]!),
-                borderRadius: BorderRadius.circular(12.r),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    globalTariff != null ? (globalTariff['name'] ?? '') : '6 месяц',
-                    style: GoogleFonts.poppins(
-                      fontSize: 16.sp,
-                      fontWeight: FontWeight.w500,
-                      color: textColor,
-                    ),
-                  ),
-                  Icon(
-                    Icons.keyboard_arrow_down,
-                    color: textColor,
-                    size: 24.sp,
-                  ),
-                ],
+                fontWeight: FontWeight.w600,
+                color: const Color(0xFF1B7EFF),
               ),
             ),
-          ),
+          ],
         ],
       ),
     );
@@ -1215,145 +1408,7 @@ color: textColor,
     return remainingAmount / paymentsCount;
   }
 
-  double _calculateMonthlyPayment(double total, String tariff, double downPayment) {
-    final remainingAmount = total - downPayment;
-    final months = int.tryParse(tariff.split(' ')[0]) ?? 6;
-    return remainingAmount / months;
-  }
 
-  void _showTariffModal(BuildContext context, String uniqueId, Map<String, dynamic>? currentTariff) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) {
-        final isDark = Theme.of(context).brightness == Brightness.dark;
-        final backgroundColor = isDark ? const Color(0xFF1A1A1A) : Colors.white;
-        final textColor = isDark ? Colors.white : Colors.black87;
-        
-        return Container(
-          height: MediaQuery.of(context).size.height * 0.7,
-          decoration: BoxDecoration(
-            color: backgroundColor,
-            borderRadius: BorderRadius.only(
-              topLeft: Radius.circular(20.r),
-              topRight: Radius.circular(20.r),
-            ),
-          ),
-          child: Column(
-            children: [
-              // Handle bar
-              Container(
-                margin: EdgeInsets.only(top: 8.h),
-                width: 40.w,
-                height: 4.h,
-                decoration: BoxDecoration(
-                  color: Colors.grey[300],
-                  borderRadius: BorderRadius.circular(2.r),
-                ),
-              ),
-              
-              // Header
-              Padding(
-                padding: EdgeInsets.all(20.w),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      'Выберите тариф',
-                      style: GoogleFonts.poppins(
-                        fontSize: 18.sp,
-                        fontWeight: FontWeight.w600,
-                        color: textColor,
-                      ),
-                    ),
-                    IconButton(
-                      onPressed: () => Navigator.pop(context),
-                      icon: Icon(
-                        Icons.close,
-                        color: textColor,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              
-              // Tariff List
-              Expanded(
-                child: ListView.builder(
-                  padding: EdgeInsets.symmetric(horizontal: 20.w),
-                  itemCount: _tariffs.length,
-                  itemBuilder: (context, index) {
-                    final tariff = _tariffs[index];
-                    final isSelected = currentTariff != null && 
-                        currentTariff['id'] == tariff['id'];
-                    
-                    return Container(
-                      margin: EdgeInsets.only(bottom: 12.h),
-                      decoration: BoxDecoration(
-                        border: Border.all(
-                          color: isSelected 
-                              ? const Color(0xFF4E63EC) 
-                              : Colors.grey[300]!,
-                          width: isSelected ? 2 : 1,
-                        ),
-                        borderRadius: BorderRadius.circular(12.r),
-                      ),
-                      child: ListTile(
-                        contentPadding: EdgeInsets.symmetric(
-                          horizontal: 16.w, 
-                          vertical: 8.h,
-                        ),
-                        title: Text(
-                          tariff['name'] ?? '',
-                          style: GoogleFonts.poppins(
-                            fontSize: 16.sp,
-                            fontWeight: FontWeight.w500,
-                            color: isSelected 
-                                ? const Color(0xFF4E63EC) 
-                                : textColor,
-                          ),
-                        ),
-                        subtitle: tariff['payments_count'] > 0 
-                            ? Text(
-                                '${tariff['payments_count']} платежей',
-                                style: GoogleFonts.poppins(
-                                  fontSize: 12.sp,
-                                  color: Colors.grey[600],
-                                ),
-                              )
-                            : null,
-                        trailing: isSelected
-                            ? Icon(
-                                Icons.check_circle,
-                                color: const Color(0xFF4E63EC),
-                              )
-                            : null,
-                        onTap: () async {
-                          // Stop timer if tariff changes
-                          _checkTimer?.cancel();
-                          final prefs = await SharedPreferences.getInstance();
-                          await prefs.remove('lastChecking');
-                          
-                          setState(() {
-                            _itemTariffs[uniqueId] = tariff;
-                            _isChecking = false;
-                            _canBuy = true;
-                            _remainingSeconds = 0;
-                          });
-                          Navigator.pop(context);
-                        },
-                      ),
-                    );
-                  },
-                ),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
 
   Widget _buildEmptyCart(bool isDark, Color textColor) {
     final circleColor = isDark
@@ -1435,9 +1490,10 @@ color: textColor,
           if (_paymentSchedule != null)
             _buildPaymentScheduleCard(textColor, cardColor),
           
-          // Calculation Section
+          // Calculation Section - only for simple mode
           if (_isSimpleMode) 
             _buildSimpleModeCalculation(textColor, cardColor),
+          
           
           SizedBox(height: 24.h),
           // Order Button (not fixed)
@@ -1529,9 +1585,7 @@ color: textColor,
     final uniqueId = item['uniqueId'] as String;
     final backgroundColor = Theme.of(context).scaffoldBackgroundColor;
 
-    return GestureDetector(
-      onTap: () => _navigateToProductDetail(item),
-      child: Container(
+    return Container(
       margin: EdgeInsets.only(bottom: 16.h),
       padding: EdgeInsets.all(12.w),
       decoration: BoxDecoration(
@@ -1547,10 +1601,13 @@ color: textColor,
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Product Image
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(8.r),
-                    child: _buildCartImage(item['image'], backgroundColor),
+                  // Product Image - clickable
+                  GestureDetector(
+                    onTap: () => _navigateToProductDetail(item),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(8.r),
+                      child: _buildCartImage(item['image'], backgroundColor),
+                    ),
                   ),
                   SizedBox(width: 12.w),
                   // Product Details
@@ -1562,15 +1619,19 @@ color: textColor,
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
-                            item['name'],
-                            style: GoogleFonts.poppins(
-                              fontSize: 14.sp,
-                              fontWeight: FontWeight.w600,
-                              color: textColor,
+                          // Product Name - clickable
+                          GestureDetector(
+                            onTap: () => _navigateToProductDetail(item),
+                            child: Text(
+                              item['name'],
+                              style: GoogleFonts.poppins(
+                                fontSize: 14.sp,
+                                fontWeight: FontWeight.w600,
+                                color: textColor,
+                              ),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
                             ),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
                           ),
                           if (_variantDescription(item).isNotEmpty) ...[
                             SizedBox(height: 4.h),
@@ -1670,7 +1731,6 @@ color: textColor,
             ),
           ),
         ],
-        ),
       ),
     );
   }
@@ -2508,10 +2568,24 @@ color: textColor,
       _itemTariffs[uniqueId] = currentTariff;
     }
     
-    // Create controller for this specific item
-    final controller = TextEditingController(
-      text: currentDownPayment == 0 ? '' : currentDownPayment.toInt().toString(),
-    );
+    // Get or create controller for this specific item
+    if (!_itemDownPaymentControllers.containsKey(uniqueId)) {
+      _itemDownPaymentControllers[uniqueId] = TextEditingController(
+        text: currentDownPayment == 0 ? '' : currentDownPayment.toInt().toString(),
+      );
+      _itemDownPaymentFocusNodes[uniqueId] = FocusNode();
+    }
+    
+    final controller = _itemDownPaymentControllers[uniqueId]!;
+    final focusNode = _itemDownPaymentFocusNodes[uniqueId]!;
+    
+    // Sync controller text with current value if not focused
+    if (!focusNode.hasFocus) {
+      final currentText = currentDownPayment == 0 ? '' : currentDownPayment.toInt().toString();
+      if (controller.text != currentText) {
+        controller.text = currentText;
+      }
+    }
     
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -2549,6 +2623,7 @@ color: textColor,
           child: TextFormField(
                 enabled: !isNoInstallment,
             controller: controller,
+            focusNode: focusNode,
             keyboardType: TextInputType.number,
             inputFormatters: [
               FilteringTextInputFormatter.digitsOnly,
@@ -2597,6 +2672,13 @@ color: textColor,
               setState(() {
                 _itemDownPayments[uniqueId] = clampedValue.toDouble();
               });
+              
+              // Save item down payments to storage
+              final savedItemDownPayments = <String, double>{};
+              for (final entry in _itemDownPayments.entries) {
+                savedItemDownPayments[entry.key] = entry.value;
+              }
+              _storage.write(key: 'saved_item_down_payments', value: json.encode(savedItemDownPayments));
               
               // Update controller if value was clamped
               if (clampedValue != intValue) {
@@ -2754,6 +2836,16 @@ color: textColor,
                                     _canBuy = true;
                                     _remainingSeconds = 0;
                                   });
+                                  
+                                  // Save item tariffs to storage
+                                  final savedItemTariffs = <String, int>{};
+                                  for (final entry in _itemTariffs.entries) {
+                                    if (entry.value != null) {
+                                      savedItemTariffs[entry.key] = entry.value!['id'] as int;
+                                    }
+                                  }
+                                  _storage.write(key: 'saved_item_tariff_ids', value: json.encode(savedItemTariffs));
+                                  
                                   Navigator.of(dialogContext).pop();
                                 },
                                 child: Container(
@@ -2922,6 +3014,142 @@ color: textColor,
     }
   }
 
+  // Calculate schedule simple with debounce
+  void _scheduleCalculateDebounced() {
+    _scheduleDebounceTimer?.cancel();
+    _scheduleDebounceTimer = Timer(const Duration(seconds: 3), () {
+      _calculateScheduleSimple();
+    });
+  }
+
+  Future<void> _calculateScheduleSimple() async {
+    if (_isScheduleCalculating) return;
+    if (cartItems.isEmpty) return;
+
+    try {
+      _isScheduleCalculating = true;
+      
+      if (_isSimpleMode) {
+        // Simple mode (Mode 1)
+        final tariffId = _selectedGlobalTariff?['id'];
+        if (tariffId == null) {
+          _isScheduleCalculating = false;
+          return;
+        }
+
+        // Create product list for simple mode
+        final productList = <Map<String, dynamic>>[];
+        for (final item in cartItems) {
+          final productId = item['id'] is int 
+              ? item['id'] 
+              : int.tryParse(item['id'].toString()) ?? item['id'];
+          final quantity = item['quantity'] is int 
+              ? item['quantity'] 
+              : int.tryParse(item['quantity'].toString()) ?? item['quantity'];
+          
+          final productItem = <String, dynamic>{
+            'product_id': productId,
+            'quantity': quantity,
+          };
+          if (item['variation_id'] != null) {
+            final variationId = item['variation_id'] is int 
+                ? item['variation_id'] 
+                : int.tryParse(item['variation_id'].toString());
+            if (variationId != null) {
+              productItem['variation_id'] = variationId;
+            }
+          }
+          productList.add(productItem);
+        }
+
+        final result = await ProductServices.calculateScheduleSimple(
+          calculationMode: 1,
+          tariffId: int.tryParse(tariffId.toString()),
+          totalAdvancePayment: _globalDownPayment,
+          productList: productList,
+        );
+
+        if (result != null && mounted) {
+          // Update payment schedule with monthly_payments from simple API
+          // Don't save schedule to storage - it will be loaded from API on each mount
+          setState(() {
+            _paymentSchedule = {
+              'monthly_payments': result['monthly_payments'] ?? [],
+              'product_list': result['product_list'] ?? [],
+            };
+          });
+          
+          print('✅ Simple mode schedule simple result: ${result['monthly_payments']?.length} payments');
+        }
+      } else {
+        // Complex mode (Mode 2)
+        final productList = <Map<String, dynamic>>[];
+        
+        for (final item in cartItems) {
+          final uniqueId = item['uniqueId'] as String;
+          final tariff = _itemTariffs[uniqueId];
+          final downPayment = _itemDownPayments[uniqueId] ?? 0.0;
+          
+          if (tariff == null) {
+            _isScheduleCalculating = false;
+            return;
+          }
+
+          final productId = item['id'] is int 
+              ? item['id'] 
+              : int.tryParse(item['id'].toString()) ?? item['id'];
+          final quantity = item['quantity'] is int 
+              ? item['quantity'] 
+              : int.tryParse(item['quantity'].toString()) ?? item['quantity'];
+          final tariffId = tariff['id'] is int 
+              ? tariff['id'] 
+              : int.tryParse(tariff['id'].toString()) ?? tariff['id'];
+          final advancePayment = downPayment is int 
+              ? downPayment 
+              : downPayment.toInt();
+          
+          final productItem = <String, dynamic>{
+            'product_id': productId,
+            'quantity': quantity,
+            'tariff_id': tariffId,
+            'advance_payment': advancePayment,
+          };
+          if (item['variation_id'] != null) {
+            final variationId = item['variation_id'] is int 
+                ? item['variation_id'] 
+                : int.tryParse(item['variation_id'].toString());
+            if (variationId != null) {
+              productItem['variation_id'] = variationId;
+            }
+          }
+          productList.add(productItem);
+        }
+
+        final result = await ProductServices.calculateScheduleSimple(
+          calculationMode: 2,
+          productList: productList,
+        );
+
+        if (result != null && mounted) {
+          // Update payment schedule with monthly_payments from simple API
+          // Don't save schedule to storage - it will be loaded from API on each mount
+          setState(() {
+            _paymentSchedule = {
+              'monthly_payments': result['monthly_payments'] ?? [],
+              'product_list': result['product_list'] ?? [],
+            };
+          });
+          
+          print('✅ Complex mode schedule simple result: ${result['monthly_payments']?.length} payments');
+        }
+      }
+    } catch (e) {
+      print('❌ Error in _calculateScheduleSimple: $e');
+    } finally {
+      _isScheduleCalculating = false;
+    }
+  }
+
   String _getSelectedTariffName() {
     if (_selectedGlobalTariff == null || _tariffs.isEmpty) {
       return 'Выберите срок';
@@ -3015,7 +3243,21 @@ color: textColor,
                                   setState(() {
                                     _selectedGlobalTariff = tariff;
                                   });
+                                  
+                                  // Save tariff to storage
+                                  if (tariff != null) {
+                                    _storage.write(key: 'saved_global_tariff_id', value: json.encode(tariff['id']));
+                                  }
+                                  
                                   Navigator.of(dialogContext).pop();
+                                  
+                                  // Trigger schedule calculation with debounce when tariff changes
+                                  // Wait for modal to close first
+                                  Future.delayed(const Duration(milliseconds: 300), () {
+                                    if (mounted && cartItems.isNotEmpty) {
+                                      _scheduleCalculateDebounced();
+                                    }
+                                  });
                                 },
                                 child: Container(
                                   width: double.infinity,
@@ -3076,9 +3318,10 @@ color: textColor,
     
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final monthlyPayments = _paymentSchedule!['monthly_payments'] as List? ?? [];
+    // Simple API doesn't return these fields, so use defaults or calculate
     final totalEveryMonthPayment = _paymentSchedule!['total_every_month_payment'] ?? 0;
-    final totalProductsPrice = _paymentSchedule!['total_products_price'] ?? 0.0;
-    final totalAdvancePayment = _paymentSchedule!['total_advance_payment'] ?? 0.0;
+    final totalProductsPrice = _paymentSchedule!['total_products_price'] ?? _calculateTotal();
+    final totalAdvancePayment = _paymentSchedule!['total_advance_payment'] ?? _globalDownPayment;
     
     // Table colors for light/dark theme
     final tableBgColor = isDark ? const Color(0xFF1A1A1A) : const Color(0xFFF5F5F5);
@@ -3236,25 +3479,91 @@ color: textColor,
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(16.r),
             ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  'Итого к доплате:',
-                  style: GoogleFonts.poppins(
-                    fontSize: 16.sp,
-                    fontWeight: FontWeight.w600,
-                    color: textColor,
-                  ),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Итого к доплате:',
+                      style: GoogleFonts.poppins(
+                        fontSize: 16.sp,
+                        fontWeight: FontWeight.w600,
+                        color: textColor,
+                      ),
+                    ),
+                    Text(
+                      _formatUsdAmount(_calculateTotalMonthlyPayments(monthlyPayments)),
+                      style: GoogleFonts.poppins(
+                        fontSize: 16.sp,
+                        fontWeight: FontWeight.w600,
+                        color: const Color(0xFF1B7EFF),
+                      ),
+                    ),
+                  ],
                 ),
-                Text(
-                  _formatUsdAmount((totalProductsPrice is num ? totalProductsPrice.toDouble() : double.tryParse(totalProductsPrice.toString()) ?? 0.0) - (totalAdvancePayment is num ? totalAdvancePayment.toDouble() : double.tryParse(totalAdvancePayment.toString()) ?? 0.0)),
-                  style: GoogleFonts.poppins(
-                    fontSize: 16.sp,
-                    fontWeight: FontWeight.w600,
-                    color: const Color(0xFF1B7EFF),
-                  ),
+                SizedBox(height: 12.h),
+                // Первоначальный взнос
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Первоначальный взнос:',
+                      style: GoogleFonts.poppins(
+                        fontSize: 16.sp,
+                        fontWeight: FontWeight.w500,
+                        color: textColor,
+                      ),
+                    ),
+                    Text(
+                      _formatUsdAmount(_calculateAdvancePayment()),
+                      style: GoogleFonts.poppins(
+                        fontSize: 16.sp,
+                        fontWeight: FontWeight.w500,
+                        color: textColor,
+                      ),
+                    ),
+                  ],
                 ),
+                // В рассрочку - only for simple mode
+                if (_isSimpleMode) ...[
+                  SizedBox(height: 8.h),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'В рассрочку:',
+                        style: GoogleFonts.poppins(
+                          fontSize: 16.sp,
+                          fontWeight: FontWeight.w500,
+                          color: textColor,
+                        ),
+                      ),
+                      Row(
+                        children: [
+                          Text(
+                            _formatUsdAmount(_calculateMonthlyPayment()),
+                            style: GoogleFonts.poppins(
+                              fontSize: 16.sp,
+                              fontWeight: FontWeight.w500,
+                              color: textColor,
+                            ),
+                          ),
+                          SizedBox(width: 4.w),
+                          Text(
+                            'в месяц',
+                            style: GoogleFonts.poppins(
+                              fontSize: 16.sp,
+                              fontWeight: FontWeight.w400,
+                              color: textColor.withOpacity(0.7),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ],
               ],
             ),
           ),
